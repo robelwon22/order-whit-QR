@@ -1,7 +1,15 @@
 import React, { useEffect } from 'react';
-import { Icon } from './Icons';
+import { IconButton } from './Button';
+import { X } from 'lucide-react';
 
-export function Modal({ isOpen, onClose, title, children, maxWidth = 500 }) {
+export function Modal({
+  isOpen,
+  onClose,
+  title,
+  subtitle,
+  children,
+  maxWidth = 520,
+}) {
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = 'hidden';
@@ -23,8 +31,8 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = 500 }) {
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.55)',
-        backdropFilter: 'blur(3px)',
+        backgroundColor: 'rgba(43, 29, 20, 0.6)',
+        backdropFilter: 'blur(5px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -34,7 +42,7 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = 500 }) {
       onClick={onClose}
     >
       <div
-        className="card"
+        className="card anim-fade-in"
         style={{
           width: '100%',
           maxWidth,
@@ -42,23 +50,46 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = 500 }) {
           overflowY: 'auto',
           margin: 0,
           position: 'relative',
-          padding: 24,
-          borderRadius: 16,
-          boxShadow: '0 20px 40px rgba(0,0,0,0.2)',
-          animation: 'fadeInUp 0.2s ease-out',
+          padding: 28,
+          borderRadius: 'var(--radius-card)',
+          backgroundColor: 'var(--color-foam)',
+          border: '1px solid var(--color-line)',
+          boxShadow: 'var(--shadow-float)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: 'var(--text)' }}>{title}</h2>
-          <button
-            className="ghost"
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            marginBottom: 20,
+            gap: 12,
+          }}
+        >
+          <div>
+            <h2
+              style={{
+                fontSize: 20,
+                fontWeight: 700,
+                margin: 0,
+                color: 'var(--color-espresso)',
+                fontFamily: 'var(--font-serif)',
+              }}
+            >
+              {title}
+            </h2>
+            {subtitle && (
+              <p style={{ fontSize: 13, color: 'var(--color-muted)', marginTop: 2 }}>{subtitle}</p>
+            )}
+          </div>
+          <IconButton
+            icon={<X size={18} />}
             onClick={onClose}
-            style={{ width: 36, height: 36, minHeight: 36, padding: 0, borderRadius: '50%' }}
-            aria-label="Close"
-          >
-            <Icon name="x" size={18} />
-          </button>
+            aria-label="Close modal"
+            variant="ghost"
+            size={36}
+          />
         </div>
         <div>{children}</div>
       </div>

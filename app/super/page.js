@@ -1,22 +1,43 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import { supabase } from '../../lib/supabase';
 import { useStaff } from '../../lib/useStaff';
 import { useI18n } from '../../lib/i18n';
 import { useToast } from '../../components/ui/Toast';
-import { Icon } from '../../components/ui/Icons';
-import { Button } from '../../components/ui/Button';
-import { Input, Select, Toggle } from '../../components/ui/Input';
+import { Logo } from '../../components/ui/Logo';
+import { Button, IconButton } from '../../components/ui/Button';
+import { Input, Select } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
+import { BottomSheet } from '../../components/ui/BottomSheet';
 import { Badge, EmptyState, Skeleton, ConfirmDialog } from '../../components/ui/Badge';
 import { LanguageSwitcher } from '../../components/ui/LanguageSwitcher';
+import {
+  ShieldCheck,
+  Plus,
+  Search,
+  Filter,
+  Calendar,
+  KeyRound,
+  ExternalLink,
+  Edit2,
+  Copy,
+  RefreshCw,
+  LogOut,
+  CheckCircle2,
+  AlertTriangle,
+  Clock,
+  Coffee,
+  ArrowRight,
+  TrendingUp,
+} from 'lucide-react';
 
 const RESERVED_SLUGS = ['admin', 'login', 'bartender', 'super', 'api'];
 
 export default function SuperAdminPage() {
   const { staff, loading: authLoading, logout } = useStaff(['super_admin']);
-  const { t } = useI18n();
+  const { t, isAmharic } = useI18n();
   const { showToast } = useToast();
 
   const [cafes, setCafes] = useState([]);
@@ -35,10 +56,10 @@ export default function SuperAdminPage() {
   const [selectedCafe, setSelectedCafe] = useState(null);
   const [cafeStaff, setCafeStaff] = useState([]);
   const [loadingStaff, setLoadingStaff] = useState(false);
-  const [credentialsModal, setCredentialsModal] = useState(null); // { email, password, slug, name }
-  const [confirmDialog, setConfirmDialog] = useState(null); // { title, message, onConfirm }
+  const [credentialsModal, setCredentialsModal] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState(null);
 
-  // New Cafe Form State
+  // New Cafe Form
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
@@ -61,13 +82,11 @@ export default function SuperAdminPage() {
   const [updating, setUpdating] = useState(false);
   const [tempPassResult, setTempPassResult] = useState(null);
 
-  // Helper to get auth token
   const getAuthToken = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token || '';
   };
 
-  // Fetch all cafes and metrics
   const loadData = useCallback(async () => {
     try {
       setLoadingData(true);
@@ -93,7 +112,6 @@ export default function SuperAdminPage() {
     }
   }, [staff, loadData]);
 
-  // Auto-slug generator from cafe name
   const handleNameChange = (name) => {
     setNewName(name);
     if (!slugManuallyEdited) {
@@ -107,14 +125,14 @@ export default function SuperAdminPage() {
 
   const generateRandomPassword = () => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
-    let pass = 'Pass!';
-    for (let i = 0; i < 8; i++) {
+    let pass = 'BunaPass!';
+    for (let i = 0; i < 6; i++) {
       pass += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return pass;
   };
 
-  // Create Cafe Handler
+  // Create Cafe
   const handleCreateCafe = async (e) => {
     e.preventDefault();
     if (!newSlug || RESERVED_SLUGS.includes(newSlug.toLowerCase())) {
@@ -148,10 +166,9 @@ export default function SuperAdminPage() {
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      showToast(t('common.saved'), 'success');
+      showToast('New cafe registered successfully.', 'success');
       setShowNewModal(false);
 
-      // Open Credentials Created modal
       setCredentialsModal({
         name: data.cafe.name,
         slug: data.cafe.slug,
@@ -159,7 +176,6 @@ export default function SuperAdminPage() {
         password: adminPassword,
       });
 
-      // Reset form
       setNewName('');
       setNewSlug('');
       setSlugManuallyEdited(false);
@@ -176,24 +192,23 @@ export default function SuperAdminPage() {
   };
 
   // Open Cafe Detail
-  const handleOpenDetail = async (cafe) => {
-    setSelectedCafe(cafe);
+  const handleOpenDetail = async (c) => {
+    setSelectedCafe(c);
     setEditForm({
-      name: cafe.name,
-      slug: cafe.slug,
-      max_tables: cafe.max_tables || '',
-      currency: cafe.currency || 'ETB',
-      languages: cafe.languages || ['en', 'am'],
-      default_language: cafe.default_language || 'en',
-      active_until: cafe.active_until ? cafe.active_until.split('T')[0] : '',
+      name: c.name,
+      slug: c.slug,
+      max_tables: c.max_tables || '',
+      currency: c.currency || 'ETB',
+      languages: c.languages || ['en', 'am'],
+      default_language: c.default_language || 'en',
+      active_until: c.active_until ? c.active_until.split('T')[0] : '',
     });
     setTempPassResult(null);
 
-    // Fetch staff of this cafe
     try {
       setLoadingStaff(true);
       const token = await getAuthToken();
-      const res = await fetch(`/api/super/cafes/${cafe.id}/staff`, {
+      const res = await fetch(`/api/super/cafes/${c.id}/staff`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
@@ -207,7 +222,7 @@ export default function SuperAdminPage() {
     }
   };
 
-  // Save Cafe Updates
+  // Save updates to Cafe
   const handleSaveCafe = async () => {
     if (!selectedCafe || !editForm) return;
     setUpdating(true);
@@ -225,14 +240,9 @@ export default function SuperAdminPage() {
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      showToast(t('common.saved'), 'success');
+      showToast('Cafe details saved.', 'success');
       await loadData();
-
-      // Refresh selectedCafe state
-      setSelectedCafe((prev) => ({
-        ...prev,
-        ...editForm,
-      }));
+      setSelectedCafe((prev) => ({ ...prev, ...editForm }));
     } catch (e) {
       showToast(e.message || 'Update failed', 'error');
     } finally {
@@ -240,22 +250,22 @@ export default function SuperAdminPage() {
     }
   };
 
-  // Suspend or Reactivate Cafe
-  const handleToggleActive = (cafe) => {
-    const isActivating = !cafe.active;
-    const actionText = isActivating ? t('super.reactivate_cafe') : t('super.suspend_cafe');
+  // Toggle Suspend / Reactivate
+  const handleToggleActive = (c) => {
+    const isActivating = !c.active;
+    const actionText = isActivating ? 'Reactivate' : 'Suspend';
 
     setConfirmDialog({
-      title: `${actionText}: ${cafe.name}`,
+      title: `${actionText}: ${c.name}`,
       message: isActivating
         ? 'Reactivating this cafe will allow staff to log in and customers to access the menu.'
-        : 'Suspending this cafe will immediately block all staff logins and customer menu orders.',
+        : 'Suspending this cafe will immediately block staff logins and customer ordering.',
       confirmText: actionText,
       danger: !isActivating,
       onConfirm: async () => {
         try {
           const token = await getAuthToken();
-          const res = await fetch(`/api/super/cafes/${cafe.id}`, {
+          const res = await fetch(`/api/super/cafes/${c.id}`, {
             method: 'PATCH',
             headers: {
               'Content-Type': 'application/json',
@@ -268,8 +278,12 @@ export default function SuperAdminPage() {
 
           showToast(isActivating ? 'Cafe reactivated' : 'Cafe suspended', 'success');
           await loadData();
-          if (selectedCafe?.id === cafe.id) {
-            setSelectedCafe((prev) => ({ ...prev, active: isActivating, status: isActivating ? 'active' : 'suspended' }));
+          if (selectedCafe?.id === c.id) {
+            setSelectedCafe((prev) => ({
+              ...prev,
+              active: isActivating,
+              status: isActivating ? 'active' : 'suspended',
+            }));
           }
         } catch (e) {
           showToast(e.message || 'Action failed', 'error');
@@ -282,7 +296,6 @@ export default function SuperAdminPage() {
   const handleExtendSubscription = async (months) => {
     if (!selectedCafe) return;
     const currentBase = selectedCafe.active_until ? new Date(selectedCafe.active_until) : new Date();
-    // If expired in the past, start from today
     const baseDate = currentBase < new Date() ? new Date() : currentBase;
 
     const newDate = new Date(baseDate);
@@ -314,7 +327,7 @@ export default function SuperAdminPage() {
     }
   };
 
-  // Reset Staff Password
+  // Reset Staff Member Password
   const handleResetStaffPassword = async (staffMember) => {
     const newPass = generateRandomPassword();
     try {
@@ -335,733 +348,576 @@ export default function SuperAdminPage() {
         email: staffMember.email,
         password: newPass,
       });
-      showToast('Temporary password generated', 'success');
+      showToast('Password reset.', 'success');
     } catch (e) {
-      showToast(e.message || 'Reset password failed', 'error');
+      showToast(e.message || 'Password reset failed', 'error');
     }
   };
 
-  // Copy helper
-  const copyToClipboard = (text, label = 'Copied') => {
-    navigator.clipboard.writeText(text);
-    showToast(`${label} to clipboard!`, 'success');
-  };
-
-  // Filtered cafes
-  const filteredCafes = cafes.filter((c) => {
-    const matchesSearch =
-      c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.slug.toLowerCase().includes(search.toLowerCase());
-
-    if (!matchesSearch) return false;
-    if (statusFilter === 'all') return true;
-    return c.status === statusFilter;
-  });
+  // Filter cafes
+  const filteredCafes = useMemo(() => {
+    return cafes.filter((c) => {
+      const matchesSearch =
+        c.name.toLowerCase().includes(search.toLowerCase()) ||
+        c.slug.toLowerCase().includes(search.toLowerCase());
+      const matchesStatus =
+        statusFilter === 'all' ? true : (c.status || (c.active ? 'active' : 'suspended')) === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [cafes, search, statusFilter]);
 
   if (authLoading) {
     return (
-      <div className="wrap" style={{ marginTop: '10vh' }}>
-        <Skeleton height={60} borderRadius={12} style={{ marginBottom: 20 }} />
-        <Skeleton height={140} borderRadius={12} style={{ marginBottom: 20 }} />
-        <Skeleton height={300} borderRadius={12} />
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Skeleton height={60} width={200} />
       </div>
     );
   }
 
   return (
-    <div className="wrap">
-      {/* Top Header */}
-      <div
-        className="card"
+    <div style={{ minHeight: '100vh', backgroundColor: 'var(--bg)', color: 'var(--text)' }}>
+      {/* ─── TOP BAR ────────────────────────────────────────────────────────── */}
+      <header
         style={{
+          height: 70,
+          backgroundColor: 'var(--color-foam)',
+          borderBottom: '1px solid var(--color-line)',
           display: 'flex',
-          justifyContent: 'space-between',
           alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 14,
+          justifyContent: 'space-between',
+          padding: '0 24px',
+          position: 'sticky',
+          top: 0,
+          zIndex: 30,
+          boxShadow: 'var(--shadow-sm)',
         }}
       >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <Logo size={36} subtitle="Super Administration" />
+          <Badge variant="danger" size="sm">
+            Platform Master
+          </Badge>
+        </div>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 10,
-              backgroundColor: '#fee2e2',
-              color: '#991b1b',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+          <Button
+            variant="primary"
+            icon={<Plus size={16} />}
+            onClick={() => {
+              setAdminPassword(generateRandomPassword());
+              setShowNewModal(true);
             }}
           >
-            <span style={{ fontSize: 24 }}>👑</span>
-          </div>
-          <div>
-            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, color: 'var(--text)' }}>
-              {t('super.title')}
-            </h1>
-            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-              Logged in as {staff?.full_name} (Super Admin)
-            </p>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <LanguageSwitcher />
-          <Button variant="ghost" size="sm" onClick={logout} icon={<Icon name="x" size={16} />}>
-            {t('common.logout')}
+            New Cafe
           </Button>
+          <LanguageSwitcher size="sm" />
+          <IconButton icon={<LogOut size={16} />} onClick={logout} title="Log out" variant="ghost" />
         </div>
-      </div>
+      </header>
 
-      {/* Overview Metric Cards */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-          gap: 14,
-          marginBottom: 16,
-        }}
-      >
-        <div className="card" style={{ margin: 0, padding: 18 }}>
-          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
-            {t('super.total_cafes')}
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)' }}>
-            {overview.total_cafes}
-          </div>
+      <main style={{ maxWidth: 1200, margin: '0 auto', padding: '32px 20px 80px' }}>
+        {/* ─── STATS OVERVIEW CARDS ───────────────────────────────────────────── */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: 18,
+            marginBottom: 32,
+          }}
+        >
+          {[
+            { label: 'Total Registered Cafes', val: overview.total_cafes, icon: Coffee, color: 'var(--color-roast)' },
+            { label: 'Active Subscriptions', val: overview.active_cafes, icon: CheckCircle2, color: 'var(--color-sage)' },
+            { label: 'Expiring Soon (7 Days)', val: overview.expiring_soon, icon: AlertTriangle, color: 'var(--color-amber)' },
+            { label: 'Orders Placed Today', val: overview.orders_today, icon: TrendingUp, color: 'var(--color-caramel)' },
+          ].map((stat, idx) => {
+            const Icon = stat.icon;
+            return (
+              <div
+                key={idx}
+                className="card"
+                style={{
+                  padding: '20px 24px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 16,
+                  backgroundColor: 'var(--color-foam)',
+                }}
+              >
+                <div
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 'var(--radius)',
+                    backgroundColor: 'var(--color-cream)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: stat.color,
+                  }}
+                >
+                  <Icon size={24} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, color: 'var(--color-muted)' }}>{stat.label}</div>
+                  <div
+                    style={{
+                      fontSize: 26,
+                      fontWeight: 800,
+                      fontFamily: 'var(--font-serif)',
+                      color: 'var(--color-espresso)',
+                      marginTop: 2,
+                    }}
+                  >
+                    {stat.val}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
 
-        <div className="card" style={{ margin: 0, padding: 18 }}>
-          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
-            {t('super.active_cafes')}
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: '#15803d' }}>
-            {overview.active_cafes}
-          </div>
-        </div>
-
+        {/* ─── SEARCH & FILTER TABS ───────────────────────────────────────────── */}
         <div
           className="card"
           style={{
-            margin: 0,
-            padding: 18,
-            borderLeft: '4px solid #b45309',
-            backgroundColor: overview.expiring_soon > 0 ? '#fffbeb' : 'var(--card-bg)',
-          }}
-        >
-          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
-            {t('super.expiring_soon')}
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: '#b45309' }}>
-            {overview.expiring_soon}
-          </div>
-        </div>
-
-        <div className="card" style={{ margin: 0, padding: 18 }}>
-          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 6 }}>
-            {t('super.today_orders')}
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--primary)' }}>
-            {overview.orders_today}
-          </div>
-        </div>
-      </div>
-
-      {/* Main Cafes List Header & Actions */}
-      <div className="card">
-        <div
-          style={{
+            padding: '16px 20px',
+            marginBottom: 20,
             display: 'flex',
-            justifyContent: 'space-between',
             alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 16,
             flexWrap: 'wrap',
-            gap: 12,
-            marginBottom: 16,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 260 }}>
-            <div style={{ position: 'relative', width: '100%', maxWidth: 320 }}>
-              <input
-                type="text"
-                placeholder="Search cafes by name or slug..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                style={{ paddingLeft: 38 }}
-              />
-              <span style={{ position: 'absolute', left: 12, top: 12, color: 'var(--text-muted)' }}>
-                <Icon name="search" size={18} />
-              </span>
-            </div>
+          {/* Search box */}
+          <div style={{ position: 'relative', flex: 1, minWidth: 240, maxWidth: 420 }}>
+            <Search
+              size={17}
+              style={{
+                position: 'absolute',
+                left: 14,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                color: 'var(--color-muted)',
+              }}
+            />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search cafe name or slug..."
+              style={{
+                paddingLeft: 42,
+                borderRadius: 'var(--radius-full)',
+                minHeight: 42,
+                fontSize: 14,
+              }}
+            />
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* Status Filter */}
-            <div style={{ display: 'inline-flex', background: 'rgba(0,0,0,0.04)', borderRadius: 8, padding: 3 }}>
-              {['all', 'active', 'suspended', 'expired'].map((st) => (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={() => setStatusFilter(st)}
-                  style={{
-                    minHeight: 34,
-                    height: 34,
-                    padding: '0 12px',
-                    borderRadius: 6,
-                    border: 'none',
-                    background: statusFilter === st ? '#ffffff' : 'transparent',
-                    color: statusFilter === st ? 'var(--text)' : 'var(--text-muted)',
-                    boxShadow: statusFilter === st ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                    fontSize: 13,
-                    fontWeight: statusFilter === st ? 700 : 500,
-                    textTransform: 'capitalize',
-                  }}
-                >
-                  {st}
-                </button>
-              ))}
-            </div>
+          {/* Status filter buttons */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {[
+              { id: 'all', label: 'All Cafes' },
+              { id: 'active', label: 'Active' },
+              { id: 'suspended', label: 'Suspended' },
+              { id: 'expired', label: 'Expired' },
+            ].map((flt) => (
+              <button
+                key={flt.id}
+                onClick={() => setStatusFilter(flt.id)}
+                style={{
+                  padding: '7px 16px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: 13,
+                  fontWeight: statusFilter === flt.id ? 700 : 500,
+                  backgroundColor: statusFilter === flt.id ? 'var(--color-roast)' : 'var(--color-cream)',
+                  color: statusFilter === flt.id ? '#FFF' : 'var(--color-espresso)',
+                  border: '1px solid var(--color-line)',
+                  cursor: 'pointer',
+                  transition: 'all var(--transition-fast)',
+                }}
+              >
+                {flt.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
-            <Button
-              onClick={() => {
-                setShowNewModal(true);
-                setAdminPassword(generateRandomPassword());
-              }}
-              icon={<Icon name="plus" size={18} />}
-            >
-              {t('super.new_cafe')}
+        {/* ─── CAFES TABLE ────────────────────────────────────────────────────── */}
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div
+            style={{
+              padding: '16px 24px',
+              borderBottom: '1px solid var(--color-line)',
+              backgroundColor: 'var(--color-cream)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--color-espresso)' }}>
+              Registered Cafes ({filteredCafes.length})
+            </span>
+            <Button variant="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={loadData}>
+              Refresh
             </Button>
           </div>
+
+          {loadingData ? (
+            <div style={{ padding: 32, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <Skeleton height={60} borderRadius={12} />
+              <Skeleton height={60} borderRadius={12} />
+            </div>
+          ) : filteredCafes.length === 0 ? (
+            <div style={{ padding: 40 }}>
+              <EmptyState
+                type="coffee"
+                title="No matching cafes found"
+                description="Try another search term or click 'New Cafe' to add a cafe to the platform."
+              />
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {filteredCafes.map((c) => {
+                const status = c.status || (c.active ? 'active' : 'suspended');
+                let badgeVariant = 'success';
+                if (status === 'suspended') badgeVariant = 'warning';
+                if (status === 'expired') badgeVariant = 'danger';
+
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '18px 24px',
+                      borderBottom: '1px solid var(--color-line)',
+                      gap: 16,
+                      flexWrap: 'wrap',
+                      transition: 'background var(--transition-fast)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                      <div
+                        style={{
+                          width: 44,
+                          height: 44,
+                          borderRadius: 'var(--radius)',
+                          backgroundColor: 'var(--color-cream)',
+                          border: '1.5px solid var(--color-line)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 22,
+                        }}
+                      >
+                        ☕
+                      </div>
+
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--color-espresso)' }}>
+                            {c.name}
+                          </span>
+                          <Badge variant={badgeVariant} size="sm" dot>
+                            {status.toUpperCase()}
+                          </Badge>
+                        </div>
+                        <div style={{ fontSize: 13, color: 'var(--color-muted)', marginTop: 2 }}>
+                          Slug: <span style={{ fontFamily: 'monospace' }}>/{c.slug}</span> · Currency: {c.currency} · Max tables: {c.max_tables || '∞'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <Link href={`/admin?cafe=${c.id}`}>
+                        <Button size="sm" variant="secondary" icon={<ExternalLink size={14} />}>
+                          Impersonate Admin
+                        </Button>
+                      </Link>
+
+                      <Button size="sm" variant="primary" onClick={() => handleOpenDetail(c)}>
+                        Manage Cafe
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
+      </main>
 
-        {/* Cafe Cards / Table */}
-        {loadingData ? (
-          <div>
-            <Skeleton height={64} borderRadius={8} style={{ marginBottom: 10 }} />
-            <Skeleton height={64} borderRadius={8} style={{ marginBottom: 10 }} />
-            <Skeleton height={64} borderRadius={8} />
-          </div>
-        ) : filteredCafes.length === 0 ? (
-          <EmptyState
-            icon="☕"
-            title="No cafes found"
-            description={search ? 'Try clearing your search query or changing the filter.' : 'Create your first cafe to get started!'}
-            action={
-              <Button onClick={() => setShowNewModal(true)}>
-                {t('super.new_cafe')}
-              </Button>
-            }
-          />
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {filteredCafes.map((cafe) => {
-              const badgeVariant =
-                cafe.status === 'active' ? 'success' : cafe.status === 'expired' ? 'warning' : 'danger';
-
-              const activeUntilDate = cafe.active_until ? new Date(cafe.active_until) : null;
-              const formattedDate = activeUntilDate
-                ? activeUntilDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-                : 'No expiration';
-
-              return (
-                <div
-                  key={cafe.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    flexWrap: 'wrap',
-                    padding: '16px 18px',
-                    borderRadius: 10,
-                    border: '1px solid var(--border)',
-                    backgroundColor: '#ffffff',
-                    gap: 14,
-                    transition: 'border-color 0.15s ease',
-                  }}
-                >
-                  <div style={{ minWidth: 200, flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <b style={{ fontSize: 16, color: 'var(--text)' }}>{cafe.name}</b>
-                      <Badge variant={badgeVariant}>
-                        {cafe.status}
-                      </Badge>
-                      {cafe.is_expiring_soon && (
-                        <Badge variant="warning">Expiring Soon</Badge>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                      slug: <code style={{ background: '#f1ece4', padding: '2px 6px', borderRadius: 4 }}>/{cafe.slug}</code>
-                      {' '}&middot;{' '}
-                      Sub: <b>{formattedDate}</b>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 18, fontSize: 13, color: 'var(--text)' }}>
-                    <div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Tables</div>
-                      <b>{cafe.tables_count} {cafe.max_tables ? `/ ${cafe.max_tables}` : ''}</b>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Staff</div>
-                      <b>{cafe.staff_count}</b>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Orders Today</div>
-                      <b style={{ color: 'var(--primary)' }}>{cafe.orders_today}</b>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Button variant="secondary" size="sm" onClick={() => handleOpenDetail(cafe)}>
-                      Manage
-                    </Button>
-                    <a
-                      href={`/admin?impersonate=${cafe.id}`}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        height: 36,
-                        padding: '0 12px',
-                        borderRadius: 6,
-                        backgroundColor: '#f5ebe1',
-                        color: '#6f4e37',
-                        fontSize: 13,
-                        fontWeight: 600,
-                        textDecoration: 'none',
-                      }}
-                    >
-                      {t('super.open_as_admin')}
-                    </a>
-                    <button
-                      className="ghost"
-                      onClick={() => copyToClipboard(`${window.location.origin}/${cafe.slug}`, 'Menu link copied')}
-                      title="Copy Public Menu Link"
-                      style={{ width: 36, height: 36, minHeight: 36, padding: 0 }}
-                    >
-                      <Icon name="coffee" size={16} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* NEW CAFE MODAL */}
+      {/* ─── NEW CAFE MODAL ─────────────────────────────────────────────────── */}
       <Modal
         isOpen={showNewModal}
-        onClose={() => !creating && setShowNewModal(false)}
-        title={t('super.new_cafe')}
+        onClose={() => setShowNewModal(false)}
+        title="Register New Cafe"
+        subtitle="Provision a cafe account with slug, initial administrator, and subscription"
         maxWidth={580}
       >
-        <form onSubmit={handleCreateCafe} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <form onSubmit={handleCreateCafe} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <Input
-            label="Cafe Name"
-            placeholder="e.g. Tomoca Coffee"
+            label="Cafe Brand Name"
             value={newName}
             onChange={(e) => handleNameChange(e.target.value)}
+            placeholder="e.g. Tomoca Coffee"
             required
             autoFocus
           />
 
-          <div>
-            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              {t('super.slug')}
-            </label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14, color: 'var(--text-muted)' }}>{window.location.origin}/</span>
-              <input
-                type="text"
-                placeholder="tomoca-coffee"
-                value={newSlug}
-                onChange={(e) => {
-                  setSlugManuallyEdited(true);
-                  setNewSlug(e.target.value.toLowerCase().trim());
-                }}
-                required
-              />
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Only lowercase letters, numbers, and hyphens.
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Input
-              label="Table Limit (optional)"
-              type="number"
-              min="1"
-              placeholder="e.g. 25"
-              value={newMaxTables}
-              onChange={(e) => setNewMaxTables(e.target.value)}
-            />
-            <Input
-              label="Currency"
-              value={newCurrency}
-              onChange={(e) => setNewCurrency(e.target.value.toUpperCase())}
-              required
-            />
-          </div>
-
           <Input
-            label={t('super.sub_end_date')}
-            type="date"
-            value={newActiveUntil}
-            onChange={(e) => setNewActiveUntil(e.target.value)}
+            label="URL Slug (Unique)"
+            value={newSlug}
+            onChange={(e) => {
+              setNewSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''));
+              setSlugManuallyEdited(true);
+            }}
+            placeholder="e.g. tomoca"
+            helper={`Menu will be available at: /${newSlug || 'your-slug'}`}
             required
           />
 
-          {/* Languages selection */}
-          <div>
-            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              Supported Languages
-            </label>
-            <div style={{ display: 'flex', gap: 16 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14 }}>
-                <input
-                  type="checkbox"
-                  checked={newLanguages.includes('en')}
-                  onChange={(e) => {
-                    if (e.target.checked) setNewLanguages([...newLanguages, 'en']);
-                    else if (newLanguages.length > 1) setNewLanguages(newLanguages.filter((l) => l !== 'en'));
-                  }}
-                  style={{ width: 18, height: 18, minHeight: 18 }}
-                />
-                English (EN)
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14 }}>
-                <input
-                  type="checkbox"
-                  checked={newLanguages.includes('am')}
-                  onChange={(e) => {
-                    if (e.target.checked) setNewLanguages([...newLanguages, 'am']);
-                    else if (newLanguages.length > 1) setNewLanguages(newLanguages.filter((l) => l !== 'am'));
-                  }}
-                  style={{ width: 18, height: 18, minHeight: 18 }}
-                />
-                Amharic (አማ)
-              </label>
-            </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Input
+              label="Initial Subscription Days"
+              type="date"
+              value={newActiveUntil}
+              onChange={(e) => setNewActiveUntil(e.target.value)}
+              required
+            />
+            <Input
+              label="Max Tables (Limit)"
+              type="number"
+              min="1"
+              value={newMaxTables}
+              onChange={(e) => setNewMaxTables(e.target.value)}
+              placeholder="e.g. 20 (or blank for unlimited)"
+            />
           </div>
 
-          {/* Initial Admin Details */}
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 4 }}>
-            <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 12 }}>
-              First Cafe Admin Account
-            </h4>
-
+          <div
+            style={{
+              padding: '14px 16px',
+              backgroundColor: 'var(--color-cream)',
+              borderRadius: 'var(--radius)',
+              border: '1px solid var(--color-line)',
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: 'var(--color-espresso)' }}>
+              Initial Cafe Admin Credentials
+            </div>
             <Input
-              label={t('super.admin_name')}
-              placeholder="e.g. Abebe Bikila"
+              label="Admin Full Name"
               value={adminName}
               onChange={(e) => setAdminName(e.target.value)}
+              placeholder="e.g. Dawit Haile"
               required
             />
-
             <Input
-              label={t('super.admin_email')}
+              label="Admin Email"
               type="email"
-              placeholder="admin@tomoca.com"
               value={adminEmail}
               onChange={(e) => setAdminEmail(e.target.value)}
+              placeholder="admin@tomoca.com"
               required
             />
-
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <label style={{ fontSize: 13, fontWeight: 600 }}>{t('super.admin_password')}</label>
-                <button
-                  type="button"
-                  onClick={() => setAdminPassword(generateRandomPassword())}
-                  style={{ background: 'none', border: 'none', padding: 0, minHeight: 'auto', color: 'var(--primary)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
-                >
-                  Generate New
-                </button>
-              </div>
-              <input
-                type="text"
-                value={adminPassword}
-                onChange={(e) => setAdminPassword(e.target.value)}
-                required
-              />
-            </div>
+            <Input
+              label="Admin Password"
+              value={adminPassword}
+              onChange={(e) => setAdminPassword(e.target.value)}
+              required
+            />
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
-            <Button variant="ghost" type="button" onClick={() => setShowNewModal(false)} disabled={creating}>
-              {t('common.cancel')}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12 }}>
+            <Button variant="ghost" type="button" onClick={() => setShowNewModal(false)}>
+              Cancel
             </Button>
             <Button type="submit" loading={creating}>
-              Create Cafe & Admin
+              Create Cafe
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* CREDENTIALS CREATED MODAL (Shown once with Copy Buttons) */}
-      <Modal
-        isOpen={Boolean(credentialsModal)}
-        onClose={() => setCredentialsModal(null)}
-        title="🎉 Cafe & Admin Created!"
-        maxWidth={480}
-      >
-        {credentialsModal && (
-          <div>
-            <p style={{ fontSize: 14, color: 'var(--text)', marginBottom: 16 }}>
-              Cafe <b>{credentialsModal.name}</b> has been registered. Please copy these credentials now; the password will not be shown again.
-            </p>
-
-            <div style={{ backgroundColor: '#fdf6ee', padding: 16, borderRadius: 10, border: '1px solid #fed7aa', marginBottom: 16 }}>
-              <div style={{ marginBottom: 10 }}>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block' }}>Admin Email</span>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <code style={{ fontSize: 14, fontWeight: 700 }}>{credentialsModal.email}</code>
-                  <button
-                    className="ghost"
-                    size="sm"
-                    onClick={() => copyToClipboard(credentialsModal.email, 'Email copied')}
-                    style={{ height: 32, minHeight: 32, padding: '0 8px', fontSize: 12 }}
-                  >
-                    Copy
-                  </button>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: 10 }}>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block' }}>Temporary Password</span>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <code style={{ fontSize: 14, fontWeight: 700, color: 'var(--primary)' }}>{credentialsModal.password}</code>
-                  <button
-                    className="ghost"
-                    size="sm"
-                    onClick={() => copyToClipboard(credentialsModal.password, 'Password copied')}
-                    style={{ height: 32, minHeight: 32, padding: '0 8px', fontSize: 12 }}
-                  >
-                    Copy
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)', display: 'block' }}>Menu Link</span>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 13, wordBreak: 'break-all' }}>
-                    {window.location.origin}/{credentialsModal.slug}
-                  </span>
-                  <button
-                    className="ghost"
-                    size="sm"
-                    onClick={() => copyToClipboard(`${window.location.origin}/${credentialsModal.slug}`, 'Menu link copied')}
-                    style={{ height: 32, minHeight: 32, padding: '0 8px', fontSize: 12 }}
-                  >
-                    Copy
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <Button style={{ width: '100%' }} onClick={() => setCredentialsModal(null)}>
-              I Have Saved the Credentials
-            </Button>
-          </div>
-        )}
-      </Modal>
-
-      {/* CAFE DETAIL & EDIT MODAL */}
-      <Modal
-        isOpen={Boolean(selectedCafe)}
-        onClose={() => setSelectedCafe(null)}
-        title={selectedCafe ? `Manage: ${selectedCafe.name}` : ''}
-        maxWidth={620}
-      >
-        {selectedCafe && editForm && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {/* Top Status & Quick Impersonate */}
+      {/* ─── CAFE DETAIL MODAL ──────────────────────────────────────────────── */}
+      {selectedCafe && editForm && (
+        <Modal
+          isOpen={!!selectedCafe}
+          onClose={() => setSelectedCafe(null)}
+          title={`Manage ${selectedCafe.name}`}
+          subtitle={`Slug: /${selectedCafe.slug} · Subscription active until: ${editForm.active_until || 'N/A'}`}
+          maxWidth={620}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            {/* Subscription Quick Extension Buttons */}
             <div
               style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '12px 14px',
-                borderRadius: 8,
-                backgroundColor: 'var(--primary-light)',
+                backgroundColor: 'var(--color-cream)',
+                padding: '16px 20px',
+                borderRadius: 'var(--radius)',
+                border: '1px solid var(--color-line)',
               }}
             >
-              <div>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Status: </span>
-                <Badge variant={selectedCafe.status === 'active' ? 'success' : 'danger'}>
-                  {selectedCafe.status}
-                </Badge>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: 'var(--color-espresso)' }}>
+                Subscription Shortcuts
               </div>
-
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Button size="sm" variant="secondary" onClick={() => handleExtendSubscription(1)}>
+                  +1 Month
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => handleExtendSubscription(3)}>
+                  +3 Months
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => handleExtendSubscription(12)}>
+                  +1 Year
+                </Button>
                 <Button
                   size="sm"
-                  variant={selectedCafe.active ? 'danger' : 'secondary'}
+                  variant={selectedCafe.active ? 'danger' : 'primary'}
                   onClick={() => handleToggleActive(selectedCafe)}
                 >
-                  {selectedCafe.active ? t('super.suspend_cafe') : t('super.reactivate_cafe')}
+                  {selectedCafe.active ? 'Suspend Cafe' : 'Reactivate Cafe'}
                 </Button>
-                <a
-                  href={`/admin?impersonate=${selectedCafe.id}`}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    height: 36,
-                    padding: '0 12px',
-                    borderRadius: 6,
-                    backgroundColor: 'var(--primary)',
-                    color: '#ffffff',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    textDecoration: 'none',
-                  }}
-                >
-                  {t('super.open_as_admin')}
-                </a>
               </div>
             </div>
 
-            {/* Editable Info */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            {/* Editable Fields */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <Input
                 label="Cafe Name"
                 value={editForm.name}
                 onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
               />
               <Input
-                label="Slug"
-                value={editForm.slug}
-                onChange={(e) => setEditForm({ ...editForm, slug: e.target.value.toLowerCase().trim() })}
-              />
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <Input
-                label="Table Limit"
+                label="Max Tables Allowed"
                 type="number"
                 value={editForm.max_tables}
                 onChange={(e) => setEditForm({ ...editForm, max_tables: e.target.value })}
-                placeholder="Unlimited"
+                placeholder="Leave blank for unlimited"
               />
               <Input
-                label="Currency"
-                value={editForm.currency}
-                onChange={(e) => setEditForm({ ...editForm, currency: e.target.value.toUpperCase() })}
+                label="Active Until Date"
+                type="date"
+                value={editForm.active_until}
+                onChange={(e) => setEditForm({ ...editForm, active_until: e.target.value })}
               />
             </div>
 
-            {/* Subscription Extension */}
-            <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 14 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Subscription Expiration</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-                <input
-                  type="date"
-                  value={editForm.active_until}
-                  onChange={(e) => setEditForm({ ...editForm, active_until: e.target.value })}
-                  style={{ maxWidth: 200 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Quick extend:</span>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => handleExtendSubscription(1)}
-                  style={{ height: 34, minHeight: 34, padding: '0 10px', fontSize: 12 }}
-                >
-                  +1 Mo
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => handleExtendSubscription(3)}
-                  style={{ height: 34, minHeight: 34, padding: '0 10px', fontSize: 12 }}
-                >
-                  +3 Mo
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => handleExtendSubscription(12)}
-                  style={{ height: 34, minHeight: 34, padding: '0 10px', fontSize: 12 }}
-                >
-                  +1 Yr
-                </button>
-              </div>
-            </div>
-
-            <Button onClick={handleSaveCafe} loading={updating}>
+            <Button variant="primary" loading={updating} onClick={handleSaveCafe}>
               Save Cafe Settings
             </Button>
 
-            {/* Staff list & Reset Password */}
-            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-              <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>
+            {/* Cafe Staff list inside modal */}
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: 'var(--color-espresso)' }}>
                 Cafe Staff Accounts ({cafeStaff.length})
-              </h4>
-
-              {tempPassResult && (
-                <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', padding: 12, borderRadius: 8, marginBottom: 12 }}>
-                  <div style={{ fontSize: 13, color: '#166534', fontWeight: 600 }}>
-                    Password reset for {tempPassResult.name} ({tempPassResult.email}):
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                    <code style={{ fontSize: 14, fontWeight: 700 }}>{tempPassResult.password}</code>
-                    <button
-                      className="ghost"
-                      onClick={() => copyToClipboard(tempPassResult.password, 'Password copied')}
-                      style={{ height: 28, minHeight: 28, padding: '0 8px', fontSize: 12 }}
-                    >
-                      Copy
-                    </button>
-                  </div>
-                </div>
-              )}
-
+              </div>
               {loadingStaff ? (
-                <Skeleton height={40} borderRadius={6} />
+                <Skeleton height={50} />
               ) : cafeStaff.length === 0 ? (
-                <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No staff registered yet.</div>
+                <div style={{ fontSize: 13, color: 'var(--color-muted)' }}>No staff members found.</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {cafeStaff.map((st) => (
+                  {cafeStaff.map((s) => (
                     <div
-                      key={st.user_id}
+                      key={s.user_id}
                       style={{
+                        padding: '10px 14px',
+                        backgroundColor: 'var(--color-cream)',
+                        borderRadius: 'var(--radius-sm)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        padding: '8px 12px',
-                        borderRadius: 6,
-                        backgroundColor: '#f8f6f2',
+                        fontSize: 13,
                       }}
                     >
                       <div>
-                        <b>{st.full_name}</b> <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>({st.role})</span>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{st.email}</div>
+                        <b>{s.full_name}</b> ({s.role}) - {s.email}
                       </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleResetStaffPassword(st)}
-                      >
-                        Reset Password
+                      <Button size="sm" variant="ghost" onClick={() => handleResetStaffPassword(s)}>
+                        Reset Pass
                       </Button>
                     </div>
                   ))}
                 </div>
               )}
             </div>
-          </div>
-        )}
-      </Modal>
 
-      {/* CONFIRM DIALOG */}
+            {tempPassResult && (
+              <div
+                style={{
+                  backgroundColor: '#FEF9C3',
+                  padding: 14,
+                  borderRadius: 'var(--radius)',
+                  border: '1px solid #F59E0B',
+                  fontSize: 13,
+                }}
+              >
+                <div>New password for <b>{tempPassResult.name}</b>:</div>
+                <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 15, marginTop: 4 }}>
+                  {tempPassResult.password}
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* ─── CREDENTIALS CREATED MODAL ───────────────────────────────────────── */}
+      {credentialsModal && (
+        <Modal
+          isOpen={!!credentialsModal}
+          onClose={() => setCredentialsModal(null)}
+          title="Cafe Created Successfully!"
+        >
+          <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ fontSize: 40 }}>🎉</div>
+            <p style={{ fontSize: 14, color: 'var(--color-muted)' }}>
+              Save these credentials to hand over to the cafe owner:
+            </p>
+            <div
+              style={{
+                backgroundColor: 'var(--color-cream)',
+                padding: 16,
+                borderRadius: 'var(--radius)',
+                textAlign: 'left',
+                fontFamily: 'monospace',
+                fontSize: 14,
+                lineHeight: 1.8,
+              }}
+            >
+              <div><b>Cafe:</b> {credentialsModal.name}</div>
+              <div><b>Menu URL:</b> /{credentialsModal.slug}</div>
+              <div><b>Admin Email:</b> {credentialsModal.email}</div>
+              <div><b>Admin Password:</b> {credentialsModal.password}</div>
+              <div><b>Staff Login:</b> /login</div>
+            </div>
+            <Button
+              variant="secondary"
+              icon={<Copy size={15} />}
+              onClick={async () => {
+                const text = `Cafe: ${credentialsModal.name}\nMenu: /${credentialsModal.slug}\nAdmin Email: ${credentialsModal.email}\nAdmin Password: ${credentialsModal.password}\nLogin: /login`;
+                await navigator.clipboard.writeText(text);
+                showToast('Credentials copied to clipboard!', 'success');
+              }}
+            >
+              Copy Credentials
+            </Button>
+            <Button variant="primary" onClick={() => setCredentialsModal(null)}>
+              Done
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ─── CONFIRM DIALOG ─────────────────────────────────────────────────── */}
       {confirmDialog && (
         <ConfirmDialog
-          isOpen={Boolean(confirmDialog)}
+          isOpen={!!confirmDialog}
           onClose={() => setConfirmDialog(null)}
           onConfirm={confirmDialog.onConfirm}
           title={confirmDialog.title}

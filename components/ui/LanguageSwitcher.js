@@ -3,7 +3,13 @@
 import React from 'react';
 import { useI18n } from '../../lib/i18n';
 
-export function LanguageSwitcher({ languages = ['en', 'am'], activeLang, onSelect, className = '' }) {
+export function LanguageSwitcher({
+  languages = ['en', 'am'],
+  activeLang,
+  onSelect,
+  className = '',
+  size = 'md', // 'sm', 'md'
+}) {
   const { lang, setLang } = useI18n();
   const current = activeLang || lang;
 
@@ -22,16 +28,21 @@ export function LanguageSwitcher({ languages = ['en', 'am'], activeLang, onSelec
     }
   };
 
+  const height = size === 'sm' ? 32 : 38;
+  const padding = size === 'sm' ? '0 10px' : '0 14px';
+  const fontSize = size === 'sm' ? 12 : 13;
+
   return (
     <div
       className={`lang-switcher ${className}`}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        background: 'rgba(0, 0, 0, 0.06)',
-        borderRadius: 20,
+        background: 'var(--color-cream)',
+        borderRadius: 'var(--radius-full)',
         padding: 3,
-        border: '1px solid var(--border)',
+        border: '1.5px solid var(--color-line)',
+        boxShadow: 'var(--shadow-sm)',
       }}
     >
       {languages.map((l) => {
@@ -42,17 +53,19 @@ export function LanguageSwitcher({ languages = ['en', 'am'], activeLang, onSelec
             type="button"
             onClick={() => handleSwitch(l)}
             style={{
-              minHeight: 32,
-              height: 32,
-              padding: '0 12px',
-              borderRadius: 16,
+              minHeight: height,
+              height: height,
+              padding: padding,
+              borderRadius: 'var(--radius-full)',
               border: 'none',
-              background: isActive ? 'var(--primary, #6f4e37)' : 'transparent',
-              color: isActive ? '#ffffff' : 'var(--text-muted, #4b5563)',
+              background: isActive ? 'var(--color-roast)' : 'transparent',
+              color: isActive ? '#FFFFFF' : 'var(--color-muted)',
               fontWeight: 700,
-              fontSize: 13,
+              fontSize: fontSize,
               cursor: 'pointer',
-              transition: 'all 0.15s ease',
+              transition: 'all var(--transition-fast)',
+              userSelect: 'none',
+              boxShadow: isActive ? '0 2px 8px rgba(111, 78, 55, 0.25)' : 'none',
             }}
           >
             {labels[l] || l.toUpperCase()}

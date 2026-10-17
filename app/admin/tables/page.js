@@ -1,231 +1,72 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { useStaff } from '../../../lib/useStaff';
 import { useToast } from '../../../components/ui/Toast';
-import { Icon } from '../../../components/ui/Icons';
-import { generateQRSvg } from '../../../lib/qr';
+import { useI18n } from '../../../lib/i18n';
+import { AppShell } from '../../../components/ui/AppShell';
+import { Button, IconButton } from '../../../components/ui/Button';
+import { Input, Select, Toggle } from '../../../components/ui/Input';
+import { Modal } from '../../../components/ui/Modal';
+import { Badge, EmptyState, Skeleton, ConfirmDialog } from '../../../components/ui/Badge';
+import {
+  getSiteUrl,
+  isInvalidForProduction,
+  buildTableQrUrl,
+  generateQRSvg,
+  generateQRDataURLAsync,
+} from '../../../lib/qr';
+import {
+  QrCode,
+  Plus,
+  Printer,
+  Copy,
+  ExternalLink,
+  Edit2,
+  Trash2,
+  RefreshCw,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+  HelpCircle,
+  Activity,
+  Download,
+  Share2,
+} from 'lucide-react';
 
 function authHeader(session) {
   return { Authorization: 'Bearer ' + session.access_token };
 }
 
-function buildMenuUrl(cafe, table) {
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  return origin + '/' + cafe.slug + '?table=' + table.token;
-}
-
-// ─── QR Modal ─────────────────────────────────────────────────────────────────
-function QRModal({ table, cafe, onClose, onResetToken }) {
-  const url = buildMenuUrl(cafe, table);
-  const svgStr = generateQRSvg(url, 220, 4);
-  const [resetting, setResetting] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch (_) {}
-  };
-
-  const doPrint = () => {
-    const encodedSvg = encodeURIComponent(svgStr);
-    const imgSrc = 'data:image/svg+xml;charset=utf-8,' + encodedSvg;
-    const html = [
-      '<!DOCTYPE html><html><head>',
-      '<title>QR - ' + table.name + '</title>',
-      '<style>',
-      'body{font-family:Inter,sans-serif;display:flex;flex-direction:column;align-items:center;',
-      'justify-content:center;min-height:100vh;margin:0;padding:32px;}',
-      '.qr-wrap{border:3px solid #1a1a1a;border-radius:16px;padding:32px;text-align:center;max-width:320px;}',
-      'h1{font-size:28px;margin-bottom:8px;color:#1f1a17;}',
-      'p.sub{font-size:14px;color:#6b635b;margin-bottom:20px;}',
-      'img{width:220px;height:220px;}',
-      '.url{font-size:11px;color:#888;word-break:break-all;margin-top:16px;}',
-      '</style></head><body>',
-      '<div class="qr-wrap">',
-      '<h1>' + table.name + '</h1>',
-      '<p class="sub">' + cafe.name + '</p>',
-      '<img src="' + imgSrc + '" alt="QR Code" />',
-      '<div class="url">' + url + '</div>',
-      '</div></body></html>',
-    ].join('');
-    const win = window.open('', '_blank');
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    win.print();
-    win.close();
-  };
-
-  const handleReset = async () => {
-    if (!confirm('Reset the QR token for "' + table.name + '"?\n\nOld QR codes will stop working immediately. Print new ones after resetting.')) return;
-    setResetting(true);
-    await onResetToken(table.id);
-    setResetting(false);
-    onClose();
-  };
-
-  return (
-    <div className="t-modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="t-modal-box" style={{ maxWidth: 380 }}>
-        <div className="t-modal-header">
-          <span style={{ fontWeight: 700, fontSize: 17 }}>QR Code — {table.name}</span>
-          <button className="t-icon-btn" onClick={onClose} aria-label="Close">
-            <Icon name="x" size={18} />
-          </button>
-        </div>
-        <div style={{ textAlign: 'center', padding: '20px 0' }}>
-          <div
-            style={{ display: 'inline-block', border: '3px solid #1f1a17', borderRadius: 12, padding: 16, background: '#fff' }}
-            dangerouslySetInnerHTML={{ __html: svgStr }}
-          />
-          <p style={{ marginTop: 12, fontSize: 13, color: 'var(--text-muted)', wordBreak: 'break-all' }}>{url}</p>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <button onClick={copy} className={copied ? 'secondary' : ''}>
-            {copied ? <><Icon name="check" size={15} /> Copied!</> : <><Icon name="eye" size={15} /> Copy Link</>}
-          </button>
-          <button onClick={doPrint} className="secondary">
-            🖨️ Print QR Card
-          </button>
-          <button onClick={handleReset} className="danger" disabled={resetting}>
-            {resetting ? 'Resetting…' : '🔄 Reset Token (Invalidates old QR)'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Edit Name Modal ──────────────────────────────────────────────────────────
-function EditNameModal({ table, onSave, onClose }) {
-  const [name, setName] = useState(table.name);
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState('');
-
-  const handleSave = async (e) => {
-    e.preventDefault();
-    if (!name.trim()) return setErr('Name cannot be empty.');
-    setSaving(true);
-    const result = await onSave(table.id, { name: name.trim() });
-    setSaving(false);
-    if (result && result.error) setErr(result.error);
-    else onClose();
-  };
-
-  return (
-    <div className="t-modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="t-modal-box" style={{ maxWidth: 360 }}>
-        <div className="t-modal-header">
-          <span style={{ fontWeight: 700 }}>Rename Table</span>
-          <button className="t-icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
-        </div>
-        <form onSubmit={handleSave} style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <input
-            value={name}
-            onChange={(e) => { setName(e.target.value); setErr(''); }}
-            placeholder="Table name"
-            autoFocus
-            maxLength={60}
-          />
-          {err && <div className="err">{err}</div>}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" className="ghost" onClick={onClose} style={{ flex: 1 }}>Cancel</button>
-            <button type="submit" disabled={saving} style={{ flex: 1 }}>{saving ? 'Saving…' : 'Save'}</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// ─── Table Row ────────────────────────────────────────────────────────────────
-function TableRow({ table, cafe, onUpdate, onDelete, onShowQR, onRename }) {
-  const [toggling, setToggling] = useState(false);
-
-  const toggle = async () => {
-    setToggling(true);
-    await onUpdate(table.id, { active: !table.active });
-    setToggling(false);
-  };
-
-  return (
-    <div
-      className="t-table-row"
-      style={{
-        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-        padding: '12px 16px', borderBottom: '1px solid var(--border)',
-        opacity: table.active ? 1 : 0.55,
-        transition: 'opacity 0.2s, background 0.15s',
-      }}
-    >
-      <span style={{ color: 'var(--border)', fontSize: 18, userSelect: 'none' }}>⠿</span>
-      <span style={{
-        width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
-        background: table.active ? 'var(--success)' : '#ccc',
-        display: 'inline-block',
-      }} title={table.active ? 'Active' : 'Inactive'} />
-      <span style={{ fontWeight: 600, fontSize: 15, flex: 1, minWidth: 80 }}>{table.name}</span>
-      <span style={{
-        fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)',
-        background: 'var(--bg)', padding: '2px 8px', borderRadius: 6, letterSpacing: 1,
-        maxWidth: 110, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }} title={table.token}>
-        {table.token ? table.token.slice(0, 8) + '…' : '—'}
-      </span>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        <button
-          className="t-icon-btn"
-          onClick={() => onShowQR(table)}
-          title="Show QR code"
-          style={{ background: 'var(--primary-light)', color: 'var(--primary)' }}
-        >
-          <Icon name="qrCode" size={16} />
-        </button>
-        <button className="t-icon-btn" onClick={() => onRename(table)} title="Rename">✏️</button>
-        <button
-          className="t-icon-btn"
-          onClick={toggle}
-          disabled={toggling}
-          title={table.active ? 'Deactivate' : 'Activate'}
-          style={{
-            background: table.active ? 'var(--success-light)' : 'var(--warning-light)',
-            color: table.active ? 'var(--success)' : 'var(--warning)',
-          }}
-        >
-          {toggling ? '…' : table.active ? '✓' : '○'}
-        </button>
-        <button
-          className="t-icon-btn"
-          onClick={() => onDelete(table)}
-          title="Delete table"
-          style={{ background: 'var(--danger-light)', color: 'var(--danger)' }}
-        >
-          <Icon name="trash" size={15} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
-export default function TablesPage() {
+export default function TablesAdminPage() {
   const { staff, cafe, cafes, setCafe, loading: authLoading, logout } = useStaff(['cafe_admin', 'super_admin']);
   const { showToast } = useToast();
+  const { isAmharic } = useI18n();
 
   const [tables, setTables] = useState([]);
   const [loading, setLoading] = useState(false);
   const [session, setSession] = useState(null);
+  const [activeCafe, setActiveCafe] = useState(null);
+
+  // Modals & Panels
+  const [qrModalTable, setQrModalTable] = useState(null);
+  const [renameModalTable, setRenameModalTable] = useState(null);
+  const [testScanTable, setTestScanTable] = useState(null);
+  const [testScanResults, setTestScanResults] = useState(null);
+  const [testingScan, setTestingScan] = useState(false);
+  const [deleteConfirmTable, setDeleteConfirmTable] = useState(null);
+
+  // Add tables form
   const [addCount, setAddCount] = useState(5);
   const [addPrefix, setAddPrefix] = useState('Table ');
   const [adding, setAdding] = useState(false);
-  const [qrTable, setQrTable] = useState(null);
-  const [renameTable, setRenameTable] = useState(null);
-  const [activeCafe, setActiveCafe] = useState(null);
+
+  // Print layout choice: 'a4-grid' (6 cards) or 'tent' (table tent)
+  const [printLayout, setPrintLayout] = useState('a4-grid');
+
+  const siteUrl = getSiteUrl();
+  const isLocalhostWarning = isInvalidForProduction(siteUrl);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => setSession(s));
@@ -233,18 +74,19 @@ export default function TablesPage() {
 
   useEffect(() => {
     if (cafe && !activeCafe) setActiveCafe(cafe);
-  }, [cafe]);
+  }, [cafe, activeCafe]);
 
+  // Fetch Tables
   const fetchTables = useCallback(async () => {
     if (!session || !activeCafe) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/tables?cafe_id=' + activeCafe.id, {
+      const res = await fetch(`/api/admin/tables?cafe_id=${activeCafe.id}`, {
         headers: authHeader(session),
       });
       const json = await res.json();
       if (json.success) {
-        setTables(json.tables);
+        setTables(json.tables || []);
       } else {
         showToast(json.error || 'Failed to load tables.', 'error');
       }
@@ -253,18 +95,23 @@ export default function TablesPage() {
     } finally {
       setLoading(false);
     }
-  }, [session, activeCafe]);
+  }, [session, activeCafe, showToast]);
 
-  useEffect(() => { fetchTables(); }, [fetchTables]);
+  useEffect(() => {
+    fetchTables();
+  }, [fetchTables]);
 
+  // Bulk Add Tables
   const handleAddTables = async (e) => {
     e.preventDefault();
     if (!activeCafe) return;
     const n = Math.min(50, Math.max(1, parseInt(addCount, 10) || 1));
-    const nums = tables.map((t) => {
-      const m = t.name.match(/(\d+)$/);
-      return m ? parseInt(m[1], 10) : 0;
-    }).filter(Boolean);
+    const nums = tables
+      .map((t) => {
+        const m = t.name.match(/(\d+)$/);
+        return m ? parseInt(m[1], 10) : 0;
+      })
+      .filter(Boolean);
     const startNum = nums.length > 0 ? Math.max(...nums) + 1 : 1;
 
     setAdding(true);
@@ -272,11 +119,16 @@ export default function TablesPage() {
       const res = await fetch('/api/admin/tables', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeader(session) },
-        body: JSON.stringify({ count: n, prefix: addPrefix, start_number: startNum, cafe_id: activeCafe.id }),
+        body: JSON.stringify({
+          count: n,
+          prefix: addPrefix,
+          start_number: startNum,
+          cafe_id: activeCafe.id,
+        }),
       });
       const json = await res.json();
       if (json.success) {
-        showToast('Added ' + json.count + ' table' + (json.count !== 1 ? 's' : '') + '.', 'success');
+        showToast(`Added ${json.count} table${json.count !== 1 ? 's' : ''}.`, 'success');
         fetchTables();
       } else {
         showToast(json.error || 'Failed to add tables.', 'error');
@@ -288,16 +140,18 @@ export default function TablesPage() {
     }
   };
 
+  // Toggle or Update Table
   const handleUpdate = async (id, updates) => {
     try {
-      const res = await fetch('/api/admin/tables/' + id, {
+      const res = await fetch(`/api/admin/tables/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...authHeader(session) },
         body: JSON.stringify(updates),
       });
       const json = await res.json();
       if (json.success) {
-        setTables((prev) => prev.map((t) => t.id === id ? json.table : t));
+        setTables((prev) => prev.map((t) => (t.id === id ? json.table : t)));
+        showToast('Table updated successfully.', 'success');
         return { success: true };
       } else {
         showToast(json.error || 'Update failed.', 'error');
@@ -309,17 +163,19 @@ export default function TablesPage() {
     }
   };
 
-  const handleDelete = async (table) => {
-    if (!confirm('Delete "' + table.name + '"?\n\nThis cannot be undone.')) return;
+  // Delete Table
+  const handleDelete = async () => {
+    if (!deleteConfirmTable) return;
     try {
-      const res = await fetch('/api/admin/tables/' + table.id, {
+      const res = await fetch(`/api/admin/tables/${deleteConfirmTable.id}`, {
         method: 'DELETE',
         headers: authHeader(session),
       });
       const json = await res.json();
       if (json.success) {
-        setTables((prev) => prev.filter((t) => t.id !== table.id));
-        showToast('"' + table.name + '" deleted.', 'success');
+        setTables((prev) => prev.filter((t) => t.id !== deleteConfirmTable.id));
+        showToast(`"${deleteConfirmTable.name}" deleted.`, 'success');
+        setDeleteConfirmTable(null);
       } else {
         showToast(json.error || 'Delete failed.', 'error');
       }
@@ -328,16 +184,20 @@ export default function TablesPage() {
     }
   };
 
+  // Reset QR Token
   const handleResetToken = async (id) => {
     try {
-      const res = await fetch('/api/admin/tables/' + id + '/reset-token', {
+      const res = await fetch(`/api/admin/tables/${id}/reset-token`, {
         method: 'POST',
         headers: authHeader(session),
       });
       const json = await res.json();
       if (json.success) {
-        setTables((prev) => prev.map((t) => t.id === id ? json.table : t));
-        showToast('Token reset. Print a new QR code.', 'success');
+        setTables((prev) => prev.map((t) => (t.id === id ? json.table : t)));
+        showToast('Token reset. Old QR codes are now invalid — reprint new one.', 'success');
+        if (qrModalTable?.id === id) {
+          setQrModalTable(json.table);
+        }
       } else {
         showToast(json.error || 'Reset failed.', 'error');
       }
@@ -346,313 +206,841 @@ export default function TablesPage() {
     }
   };
 
-  const handlePrintAll = () => {
+  // Test Scan Diagnostics
+  const handleRunTestScan = async (tbl) => {
+    setTestScanTable(tbl);
+    setTestingScan(true);
+    setTestScanResults(null);
+
+    const targetUrl = buildTableQrUrl(activeCafe.slug, tbl.token);
+
+    // Diagnostics checks
+    const checks = {
+      targetUrl,
+      cafeFound: false,
+      tableFound: false,
+      tableActive: false,
+      orderingEnabled: false,
+      errorDetail: null,
+    };
+
+    try {
+      // 1. Cafe check
+      if (activeCafe && activeCafe.slug) {
+        checks.cafeFound = true;
+      }
+
+      // 2. Table resolution check via RPC
+      const { data: resolved, error: rpcErr } = await supabase.rpc('resolve_table', {
+        p_token: tbl.token,
+      });
+
+      if (!rpcErr && resolved && resolved.length > 0) {
+        if (resolved[0].cafe_slug === activeCafe.slug) {
+          checks.tableFound = true;
+        } else {
+          checks.errorDetail = `Slug mismatch: Table belongs to "${resolved[0].cafe_slug}", but URL is for "${activeCafe.slug}".`;
+        }
+      } else {
+        checks.errorDetail = rpcErr ? rpcErr.message : 'Token not recognized by database.';
+      }
+
+      // 3. Table active status
+      if (tbl.active) {
+        checks.tableActive = true;
+      } else {
+        checks.errorDetail = 'Table is marked inactive. Toggle table to active to enable orders.';
+      }
+
+      // 4. Ordering enabled
+      if (checks.cafeFound && checks.tableFound && checks.tableActive && activeCafe.active) {
+        checks.orderingEnabled = true;
+      }
+    } catch (e) {
+      checks.errorDetail = e.message;
+    } finally {
+      setTestScanResults(checks);
+      setTestingScan(false);
+    }
+  };
+
+  // Print All QR Codes (Supports A4 Grid of 6 and Table Tent layouts)
+  const handlePrintAll = (layout = 'a4-grid') => {
+    if (isLocalhostWarning) {
+      showToast('Cannot print while NEXT_PUBLIC_SITE_URL is localhost or missing.', 'error');
+      return;
+    }
+
     const activeTables = tables.filter((t) => t.active);
-    if (activeTables.length === 0) return showToast('No active tables to print.', 'error');
+    if (activeTables.length === 0) {
+      showToast('No active tables to print.', 'error');
+      return;
+    }
 
-    const cards = activeTables.map((t) => {
-      const url = buildMenuUrl(activeCafe, t);
-      const svg = generateQRSvg(url, 200, 4);
-      return '<div class="qr-card"><div class="svg-wrap">' + svg + '</div>'
-        + '<h2>' + t.name + '</h2>'
-        + '<p class="cafe-name">' + activeCafe.name + '</p>'
-        + '<p class="url">' + url + '</p>'
-        + '</div>';
-    }).join('');
+    const cardsHtml = activeTables
+      .map((t) => {
+        const url = buildTableQrUrl(activeCafe.slug, t.token);
+        const svg = generateQRSvg(url, 240, 4);
 
-    const html = [
-      '<!DOCTYPE html><html><head>',
-      '<title>QR Codes - ' + activeCafe.name + '</title>',
-      '<style>',
-      '*{box-sizing:border-box;margin:0;padding:0;}',
-      'body{font-family:Inter,sans-serif;background:#fff;}',
-      '.grid{display:flex;flex-wrap:wrap;gap:16px;padding:24px;justify-content:center;}',
-      '.qr-card{border:2.5px solid #1a1a1a;border-radius:12px;padding:20px;text-align:center;width:240px;page-break-inside:avoid;}',
-      '.svg-wrap{display:flex;justify-content:center;}',
-      'h2{font-size:20px;font-weight:700;margin-top:12px;color:#1f1a17;}',
-      '.cafe-name{font-size:13px;color:#6b635b;margin-top:4px;}',
-      '.url{font-size:9px;color:#aaa;margin-top:10px;word-break:break-all;}',
-      '@media print{.grid{gap:8px;padding:8px;}.qr-card{break-inside:avoid;}}',
-      '</style></head><body>',
-      '<div class="grid">' + cards + '</div>',
-      '</body></html>',
-    ].join('');
+        if (layout === 'tent') {
+          return `
+            <div class="tent-card">
+              <div class="tent-half">
+                <div class="cafe-header">
+                  <h3>${activeCafe.name}</h3>
+                </div>
+                <div class="qr-box">${svg}</div>
+                <h1 class="table-name">${t.name}</h1>
+                <p class="tagline">ስካን በማድረግ ሜኑውን ይመልከቱ እና ይዘዙ</p>
+                <p class="tagline-en">Scan to see the menu & order</p>
+              </div>
+              <div class="fold-line"><span>FOLD HERE / እዚህ ጋር እጠፉት</span></div>
+              <div class="tent-half rotate">
+                <div class="cafe-header">
+                  <h3>${activeCafe.name}</h3>
+                </div>
+                <div class="qr-box">${svg}</div>
+                <h1 class="table-name">${t.name}</h1>
+                <p class="tagline">ስካን በማድረግ ሜኑውን ይመልከቱ እና ይዘዙ</p>
+                <p class="tagline-en">Scan to see the menu & order</p>
+              </div>
+            </div>
+          `;
+        }
+
+        // Default: A4 grid of 6 cards with cut marks
+        return `
+          <div class="card-wrap">
+            <div class="cut-mark top-left"></div>
+            <div class="cut-mark top-right"></div>
+            <div class="cut-mark bottom-left"></div>
+            <div class="cut-mark bottom-right"></div>
+            <div class="qr-card">
+              <div class="cafe-header">
+                <div class="cafe-logo-placeholder">☕</div>
+                <div class="cafe-title">${activeCafe.name}</div>
+              </div>
+              <div class="qr-box">${svg}</div>
+              <h1 class="table-name">${t.name}</h1>
+              <p class="scan-msg">ስካን በማድረግ ሜኑውን ይመልከቱ እና ይዘዙ</p>
+              <p class="scan-msg-en">Scan to see the menu and order</p>
+              <div class="qr-url">${url}</div>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Print QR Cards - ${activeCafe.name}</title>
+        <style>
+          @page { size: A4; margin: 12mm; }
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          body { font-family: 'Inter', system-ui, sans-serif; background: #fff; color: #1f1a17; }
+          .a4-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16mm;
+            justify-content: center;
+          }
+          .card-wrap {
+            position: relative;
+            padding: 8px;
+            page-break-inside: avoid;
+          }
+          .qr-card {
+            border: 2.5px solid #2B1D14;
+            border-radius: 16px;
+            padding: 24px 18px;
+            text-align: center;
+            background: #FFFDF9;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+          }
+          .cafe-header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 14px;
+          }
+          .cafe-logo-placeholder { font-size: 22px; }
+          .cafe-title { font-size: 16px; font-weight: 700; color: #6F4E37; letter-spacing: -0.01em; }
+          .qr-box {
+            display: flex;
+            justify-content: center;
+            padding: 10px;
+            background: #fff;
+            border-radius: 10px;
+            margin-bottom: 14px;
+            border: 1px solid #E8DCCB;
+          }
+          .table-name {
+            font-size: 32px;
+            font-weight: 800;
+            color: #2B1D14;
+            margin-bottom: 6px;
+            letter-spacing: -0.02em;
+          }
+          .scan-msg { font-size: 13px; font-weight: 600; color: #6F4E37; margin-bottom: 2px; }
+          .scan-msg-en { font-size: 12px; color: #7A6A5C; margin-bottom: 8px; }
+          .qr-url { font-size: 8px; color: #A8988B; word-break: break-all; }
+          
+          /* Cut marks */
+          .cut-mark { position: absolute; width: 12px; height: 12px; border-color: #999; border-style: solid; pointer-events: none; }
+          .top-left { top: 0; left: 0; border-width: 1px 0 0 1px; }
+          .top-right { top: 0; right: 0; border-width: 1px 1px 0 0; }
+          .bottom-left { bottom: 0; left: 0; border-width: 0 0 1px 1px; }
+          .bottom-right { bottom: 0; right: 0; border-width: 0 1px 1px 0; }
+
+          /* Table Tent Styles */
+          .tent-card {
+            border: 2px dashed #999;
+            border-radius: 14px;
+            padding: 16px;
+            margin-bottom: 24mm;
+            page-break-inside: avoid;
+            background: #FFF;
+          }
+          .tent-half { text-align: center; padding: 24px 16px; }
+          .tent-half.rotate { transform: rotate(180deg); }
+          .fold-line {
+            border-top: 1.5px dashed #C98A4B;
+            margin: 16px 0;
+            text-align: center;
+            font-size: 10px;
+            color: #C98A4B;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+          }
+          .tagline { font-size: 14px; font-weight: 700; color: #6F4E37; margin-top: 6px; }
+          .tagline-en { font-size: 12px; color: #7A6A5C; }
+        </style>
+      </head>
+      <body>
+        <div class="${layout === 'tent' ? 'tent-container' : 'a4-grid'}">
+          ${cardsHtml}
+        </div>
+      </body>
+      </html>
+    `;
 
     const win = window.open('', '_blank');
     win.document.write(html);
     win.document.close();
     win.focus();
-    win.print();
-    win.close();
+    setTimeout(() => {
+      win.print();
+    }, 400);
   };
 
-  if (authLoading) {
-    return (
-      <div className="wrap" style={{ textAlign: 'center', paddingTop: 60 }}>
-        <div className="spinner" style={{ borderTopColor: 'var(--primary)', borderColor: 'rgba(0,0,0,0.1)', width: 32, height: 32, margin: '0 auto' }} />
-        <p style={{ marginTop: 12, color: 'var(--text-muted)' }}>Loading…</p>
-      </div>
-    );
-  }
-
-  if (!staff) return null;
-
-  const maxTables = activeCafe ? (activeCafe.max_tables || '?') : '?';
   const activeCount = tables.filter((t) => t.active).length;
+  const maxTables = activeCafe?.max_tables || 'Unlimited';
 
   return (
-    <div className="wrap" style={{ maxWidth: 760, paddingBottom: 80 }}>
-
-      {/* Super Admin Banner */}
-      {staff.role === 'super_admin' && (
-        <div style={{
-          background: 'linear-gradient(135deg, #451a03, #6F4E37)',
-          color: '#fef3c7',
-          padding: '12px 18px',
-          borderRadius: 10,
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          fontSize: 14,
-          fontWeight: 600,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-        }}>
-          <span>👑 Viewing <b>{activeCafe ? activeCafe.name : '…'}</b> as super admin</span>
-          <a href="/super" style={{ color: '#fff', textDecoration: 'underline', fontSize: 13 }}>Return to Super Admin</a>
-        </div>
-      )}
-
-      {/* Header Card */}
-      <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Icon name="qrCode" size={20} /> Tables
-          </h1>
-          {activeCafe && (
-            <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--text-muted)' }}>
-              {tables.length} of {maxTables} · {activeCount} active
-            </p>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {staff.role === 'super_admin' && cafes.length > 0 && (
-            <select
-              value={activeCafe ? activeCafe.id : ''}
-              onChange={(e) => {
-                const c = cafes.find((c) => c.id === e.target.value);
-                if (c) { setActiveCafe(c); setCafe(c); }
-              }}
-              style={{ minWidth: 160, width: 'auto', padding: '8px 12px', minHeight: 40, height: 40 }}
-            >
-              {cafes.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          )}
-          <a href="/admin" style={{ textDecoration: 'none' }}>
-            <button className="ghost" style={{ height: 40, minHeight: 40 }}>
-              <Icon name="arrowLeft" size={15} /> Menu
-            </button>
-          </a>
-          <button className="ghost" onClick={logout} style={{ height: 40, minHeight: 40 }}>Log out</button>
-        </div>
-      </div>
-
-      {/* Navigation Tabs */}
-      <div style={{
-        display: 'flex', gap: 4, marginBottom: 20,
-        background: 'var(--card-bg)', borderRadius: 10, padding: 4,
-        border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
-      }}>
-        {[
-          { label: '☕ Menu', href: '/admin' },
-          { label: '🪑 Tables', href: '/admin/tables', active: true },
-          { label: '👥 Staff', href: '/admin/staff' },
-        ].map((tab) => (
-          <a key={tab.href} href={tab.href} style={{ textDecoration: 'none', flex: 1 }}>
-            <div style={{
-              padding: '10px 8px', textAlign: 'center', borderRadius: 8,
-              fontWeight: tab.active ? 700 : 500, fontSize: 14,
-              color: tab.active ? '#fff' : 'var(--text-muted)',
-              background: tab.active ? 'var(--primary)' : 'transparent',
-              transition: 'all 0.15s',
-            }}>
-              {tab.label}
+    <AppShell
+      cafe={activeCafe}
+      cafes={cafes}
+      onSelectCafe={(c) => {
+        setActiveCafe(c);
+        setCafe(c);
+      }}
+      user={staff}
+      onLogout={logout}
+      title="Tables & QR Codes"
+    >
+      <div style={{ maxWidth: 1000, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 24 }}>
+        {/* ─── QR HEALTH CHECK BANNER ────────────────────────────────────────── */}
+        <div
+          className="card"
+          style={{
+            backgroundColor: isLocalhostWarning ? '#3B1713' : 'var(--color-foam)',
+            borderColor: isLocalhostWarning ? 'var(--color-terracotta)' : 'var(--color-line)',
+            color: isLocalhostWarning ? '#FFFDF9' : 'var(--color-espresso)',
+            padding: '20px 24px',
+            boxShadow: 'var(--shadow)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 'var(--radius)',
+                  backgroundColor: isLocalhostWarning ? 'var(--color-terracotta)' : 'var(--color-sage-light)',
+                  color: isLocalhostWarning ? '#FFF' : 'var(--color-sage)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                {isLocalhostWarning ? <AlertTriangle size={24} /> : <Activity size={24} />}
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <h2
+                    style={{
+                      fontSize: 18,
+                      fontFamily: 'var(--font-serif)',
+                      color: isLocalhostWarning ? '#FFFDF9' : 'var(--color-espresso)',
+                    }}
+                  >
+                    {isLocalhostWarning ? 'QR Domain Warning (Localhost Detected)' : 'QR Code System Healthy'}
+                  </h2>
+                  <Badge variant={isLocalhostWarning ? 'danger' : 'success'} size="sm" dot>
+                    {isLocalhostWarning ? 'Blocked' : 'Production Ready'}
+                  </Badge>
+                </div>
+                <p
+                  style={{
+                    fontSize: 13,
+                    color: isLocalhostWarning ? '#FCA5A5' : 'var(--color-muted)',
+                    marginTop: 4,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {isLocalhostWarning
+                    ? 'QR codes cannot be printed with localhost. Phones cannot open a localhost address. Set NEXT_PUBLIC_SITE_URL in your Vercel project environment variables (e.g. https://order-with-qr.vercel.app).'
+                    : `Live Site URL: ${siteUrl} · ${activeCount} active tables ready for instant ordering.`}
+                </p>
+              </div>
             </div>
-          </a>
-        ))}
-      </div>
 
-      {/* Add Tables Card */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <h3 style={{ fontWeight: 700, marginBottom: 16, fontSize: 16 }}>Add Tables</h3>
-        <form onSubmit={handleAddTables} style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div style={{ flex: '1 1 160px' }}>
-            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 6, color: 'var(--text-muted)' }}>
-              Name Prefix
-            </label>
-            <input
-              value={addPrefix}
-              onChange={(e) => setAddPrefix(e.target.value)}
-              placeholder="Table "
-              maxLength={30}
-              style={{ minHeight: 42 }}
-            />
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button
+                variant={isLocalhostWarning ? 'danger' : 'primary'}
+                icon={<Printer size={16} />}
+                disabled={isLocalhostWarning || activeCount === 0}
+                onClick={() => handlePrintAll('a4-grid')}
+              >
+                Print All (A4 Grid)
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<Printer size={16} />}
+                disabled={isLocalhostWarning || activeCount === 0}
+                onClick={() => handlePrintAll('tent')}
+              >
+                Print Table Tents
+              </Button>
+            </div>
           </div>
-          <div style={{ flex: '0 0 100px' }}>
-            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 6, color: 'var(--text-muted)' }}>
-              Count (1–50)
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={addCount}
-              onChange={(e) => setAddCount(Math.min(50, Math.max(1, parseInt(e.target.value) || 1)))}
-              style={{ minHeight: 42 }}
-            />
-          </div>
-          <button type="submit" disabled={adding || !activeCafe} style={{ minHeight: 42, whiteSpace: 'nowrap' }}>
-            {adding
-              ? <><span className="spinner" style={{ width: 16, height: 16 }} /> Adding…</>
-              : <><Icon name="plus" size={16} /> Add {addCount} Table{addCount !== 1 ? 's' : ''}</>
-            }
-          </button>
-        </form>
-        <p style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)' }}>
-          Tables are numbered automatically from the last existing one. Cafe limit: {maxTables} tables.
-        </p>
-      </div>
-
-      {/* Tables List */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '14px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg)',
-        }}>
-          <span style={{ fontWeight: 700, fontSize: 15 }}>
-            {tables.length} Table{tables.length !== 1 ? 's' : ''}
-          </span>
-          {tables.length > 0 && (
-            <button
-              className="secondary"
-              onClick={handlePrintAll}
-              style={{ minHeight: 36, height: 36, padding: '0 14px', fontSize: 13 }}
-            >
-              🖨️ Print All QR Codes
-            </button>
-          )}
         </div>
 
-        {loading && (
-          <div style={{ padding: 20 }}>
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} style={{
-                height: 52, background: 'var(--bg)', borderRadius: 8,
-                marginBottom: 8, animation: 'pulse 1.5s ease-in-out infinite',
-              }} />
-            ))}
-          </div>
-        )}
+        {/* ─── BULK ADD TABLES FORM ─────────────────────────────────────────── */}
+        <div className="card" style={{ padding: 24 }}>
+          <h3
+            style={{
+              fontSize: 18,
+              fontFamily: 'var(--font-serif)',
+              color: 'var(--color-espresso)',
+              marginBottom: 16,
+            }}
+          >
+            Add New Tables
+          </h3>
+          <form
+            onSubmit={handleAddTables}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr)) 160px',
+              gap: 14,
+              alignItems: 'end',
+            }}
+          >
+            <div>
+              <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                Table Name Prefix
+              </label>
+              <Input
+                value={addPrefix}
+                onChange={(e) => setAddPrefix(e.target.value)}
+                placeholder="Table "
+                style={{ marginBottom: 0 }}
+                required
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                How Many Tables?
+              </label>
+              <Input
+                type="number"
+                min="1"
+                max="50"
+                value={addCount}
+                onChange={(e) => setAddCount(e.target.value)}
+                style={{ marginBottom: 0 }}
+                required
+              />
+            </div>
+            <div>
+              <Button type="submit" fullWidth loading={adding} icon={<Plus size={16} />}>
+                Add Tables
+              </Button>
+            </div>
+          </form>
+        </div>
 
-        {!loading && tables.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '48px 24px' }}>
-            <div style={{ fontSize: 48, marginBottom: 12 }}>🪑</div>
-            <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>No tables yet</h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>
-              Add tables above and then print QR codes for each one.
-            </p>
+        {/* ─── TABLES LIST / GRID ────────────────────────────────────────────── */}
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div
+            style={{
+              padding: '18px 24px',
+              borderBottom: '1px solid var(--color-line)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: 'var(--color-cream)',
+            }}
+          >
+            <div>
+              <h3
+                style={{
+                  fontSize: 18,
+                  fontFamily: 'var(--font-serif)',
+                  color: 'var(--color-espresso)',
+                }}
+              >
+                Configured Tables ({tables.length})
+              </h3>
+              <p style={{ fontSize: 13, color: 'var(--color-muted)' }}>
+                {activeCount} active · Capacity limit: {maxTables}
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" onClick={fetchTables} icon={<RefreshCw size={14} />}>
+              Refresh
+            </Button>
           </div>
-        )}
 
-        {!loading && tables.map((table) => (
-          <TableRow
-            key={table.id}
-            table={table}
-            cafe={activeCafe}
-            onUpdate={handleUpdate}
-            onDelete={handleDelete}
-            onShowQR={setQrTable}
-            onRename={setRenameTable}
-          />
-        ))}
+          {loading ? (
+            <div style={{ padding: 32, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <Skeleton height={56} borderRadius={12} />
+              <Skeleton height={56} borderRadius={12} />
+              <Skeleton height={56} borderRadius={12} />
+            </div>
+          ) : tables.length === 0 ? (
+            <div style={{ padding: 40 }}>
+              <EmptyState
+                type="qr"
+                title="No tables created yet"
+                description="Add your first set of tables using the form above to generate scannable QR codes."
+              />
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {tables.map((tbl) => {
+                const qrUrl = buildTableQrUrl(activeCafe?.slug, tbl.token);
+                return (
+                  <div
+                    key={tbl.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '16px 24px',
+                      borderBottom: '1px solid var(--color-line)',
+                      gap: 16,
+                      flexWrap: 'wrap',
+                      backgroundColor: tbl.active ? 'transparent' : 'rgba(0,0,0,0.02)',
+                      opacity: tbl.active ? 1 : 0.6,
+                      transition: 'background var(--transition-fast)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 180 }}>
+                      <button
+                        onClick={() => setQrModalTable(tbl)}
+                        style={{
+                          width: 44,
+                          height: 44,
+                          borderRadius: 'var(--radius)',
+                          backgroundColor: 'var(--color-cream)',
+                          border: '1.5px solid var(--color-line)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: 'var(--color-roast)',
+                          cursor: 'pointer',
+                        }}
+                        title="View & Download QR Code"
+                      >
+                        <QrCode size={22} />
+                      </button>
+
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--color-espresso)' }}>
+                            {tbl.name}
+                          </span>
+                          <Badge variant={tbl.active ? 'success' : 'neutral'} size="sm" dot>
+                            {tbl.active ? 'Active' : 'Disabled'}
+                          </Badge>
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: 'var(--color-muted)',
+                            fontFamily: 'monospace',
+                            marginTop: 2,
+                          }}
+                        >
+                          Token: {tbl.token ? tbl.token.slice(0, 10) + '…' : '—'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      {/* Test Scan Diagnostics Button */}
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleRunTestScan(tbl)}
+                        icon={<CheckCircle2 size={15} color="var(--color-sage)" />}
+                      >
+                        Test Scan
+                      </Button>
+
+                      {/* View QR Code */}
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setQrModalTable(tbl)}
+                        icon={<QrCode size={15} />}
+                      >
+                        QR Code
+                      </Button>
+
+                      {/* Rename */}
+                      <IconButton
+                        size={38}
+                        variant="secondary"
+                        icon={<Edit2 size={15} />}
+                        onClick={() => setRenameModalTable(tbl)}
+                        title="Rename Table"
+                      />
+
+                      {/* Toggle Active */}
+                      <Button
+                        size="sm"
+                        variant={tbl.active ? 'secondary' : 'primary'}
+                        onClick={() => handleUpdate(tbl.id, { active: !tbl.active })}
+                      >
+                        {tbl.active ? 'Deactivate' : 'Activate'}
+                      </Button>
+
+                      {/* Delete */}
+                      <IconButton
+                        size={38}
+                        variant="danger"
+                        icon={<Trash2 size={15} />}
+                        onClick={() => setDeleteConfirmTable(tbl)}
+                        title="Delete Table"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
-      {tables.length > 0 && (
-        <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', marginTop: 16 }}>
-          Click the QR icon on any table to view, print, or copy its link.
-        </p>
+      {/* ─── TEST SCAN DIAGNOSTICS MODAL ────────────────────────────────────── */}
+      <Modal
+        isOpen={!!testScanTable}
+        onClose={() => setTestScanTable(null)}
+        title={`Scan Diagnostics · ${testScanTable?.name || ''}`}
+        subtitle="Verifies database resolution, token validity, and ordering readiness"
+      >
+        {testingScan ? (
+          <div style={{ textAlign: 'center', padding: '32px 0' }}>
+            <div className="spinner" style={{ margin: '0 auto 16px' }} />
+            <p style={{ color: 'var(--color-muted)', fontSize: 14 }}>
+              Testing table camera scan routing...
+            </p>
+          </div>
+        ) : testScanResults ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {/* Target URL */}
+            <div
+              style={{
+                backgroundColor: 'var(--color-cream)',
+                padding: '12px 16px',
+                borderRadius: 'var(--radius)',
+                border: '1px solid var(--color-line)',
+                fontSize: 12,
+                fontFamily: 'monospace',
+                wordBreak: 'break-all',
+              }}
+            >
+              <div style={{ color: 'var(--color-muted)', marginBottom: 2 }}>Encoded QR Destination:</div>
+              <div style={{ color: 'var(--color-espresso)', fontWeight: 700 }}>
+                {testScanResults.targetUrl}
+              </div>
+            </div>
+
+            {/* Diagnostics 4 Green Checks / Red Crosses */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* Check 1: Cafe Found */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '12px 14px',
+                  borderRadius: 'var(--radius)',
+                  backgroundColor: testScanResults.cafeFound ? 'var(--color-sage-light)' : 'var(--color-terracotta-light)',
+                  border: `1px solid ${testScanResults.cafeFound ? 'rgba(107,143,113,0.3)' : 'rgba(196,85,61,0.3)'}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {testScanResults.cafeFound ? (
+                    <CheckCircle2 size={18} color="var(--color-sage)" />
+                  ) : (
+                    <XCircle size={18} color="var(--color-terracotta)" />
+                  )}
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>Cafe found</span>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700 }}>
+                  {testScanResults.cafeFound ? `"${activeCafe?.slug}"` : 'Missing'}
+                </span>
+              </div>
+
+              {/* Check 2: Table Found */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '12px 14px',
+                  borderRadius: 'var(--radius)',
+                  backgroundColor: testScanResults.tableFound ? 'var(--color-sage-light)' : 'var(--color-terracotta-light)',
+                  border: `1px solid ${testScanResults.tableFound ? 'rgba(107,143,113,0.3)' : 'rgba(196,85,61,0.3)'}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {testScanResults.tableFound ? (
+                    <CheckCircle2 size={18} color="var(--color-sage)" />
+                  ) : (
+                    <XCircle size={18} color="var(--color-terracotta)" />
+                  )}
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>Table found</span>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700 }}>
+                  {testScanResults.tableFound ? 'resolve_table() OK' : 'Failed'}
+                </span>
+              </div>
+
+              {/* Check 3: Table Active */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '12px 14px',
+                  borderRadius: 'var(--radius)',
+                  backgroundColor: testScanResults.tableActive ? 'var(--color-sage-light)' : 'var(--color-terracotta-light)',
+                  border: `1px solid ${testScanResults.tableActive ? 'rgba(107,143,113,0.3)' : 'rgba(196,85,61,0.3)'}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {testScanResults.tableActive ? (
+                    <CheckCircle2 size={18} color="var(--color-sage)" />
+                  ) : (
+                    <XCircle size={18} color="var(--color-terracotta)" />
+                  )}
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>Table active</span>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700 }}>
+                  {testScanResults.tableActive ? 'Active' : 'Inactive'}
+                </span>
+              </div>
+
+              {/* Check 4: Ordering Enabled */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '12px 14px',
+                  borderRadius: 'var(--radius)',
+                  backgroundColor: testScanResults.orderingEnabled ? 'var(--color-sage-light)' : 'var(--color-terracotta-light)',
+                  border: `1px solid ${testScanResults.orderingEnabled ? 'rgba(107,143,113,0.3)' : 'rgba(196,85,61,0.3)'}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {testScanResults.orderingEnabled ? (
+                    <CheckCircle2 size={18} color="var(--color-sage)" />
+                  ) : (
+                    <XCircle size={18} color="var(--color-terracotta)" />
+                  )}
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>Ordering enabled</span>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 700 }}>
+                  {testScanResults.orderingEnabled ? 'Ready for Phone Camera' : 'Blocked'}
+                </span>
+              </div>
+            </div>
+
+            {testScanResults.errorDetail && (
+              <div className="err" style={{ marginBottom: 0, fontSize: 13 }}>
+                <span>{testScanResults.errorDetail}</span>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+              <Button
+                variant="primary"
+                fullWidth
+                icon={<ExternalLink size={16} />}
+                onClick={() => window.open(testScanResults.targetUrl, '_blank')}
+              >
+                Open Exact Scan Link in New Tab
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      {/* ─── SINGLE TABLE QR CODE MODAL ─────────────────────────────────────── */}
+      {qrModalTable && (
+        <Modal
+          isOpen={!!qrModalTable}
+          onClose={() => setQrModalTable(null)}
+          title={`QR Code · ${qrModalTable.name}`}
+          subtitle={activeCafe?.name}
+        >
+          {(() => {
+            const qrUrl = buildTableQrUrl(activeCafe?.slug, qrModalTable.token);
+            const svgStr = generateQRSvg(qrUrl, 240, 4);
+
+            return (
+              <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <div
+                  style={{
+                    backgroundColor: '#FFFFFF',
+                    padding: 18,
+                    borderRadius: 'var(--radius)',
+                    border: '2px solid var(--color-line)',
+                    display: 'inline-flex',
+                    alignSelf: 'center',
+                    boxShadow: 'var(--shadow-sm)',
+                  }}
+                  dangerouslySetInnerHTML={{ __html: svgStr }}
+                />
+
+                <div
+                  style={{
+                    backgroundColor: 'var(--color-cream)',
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                    wordBreak: 'break-all',
+                    color: 'var(--color-espresso)',
+                  }}
+                >
+                  {qrUrl}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <Button
+                    variant="secondary"
+                    icon={<Copy size={15} />}
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(qrUrl);
+                      showToast('QR destination URL copied!', 'success');
+                    }}
+                  >
+                    Copy Link
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    icon={<Download size={15} />}
+                    onClick={async () => {
+                      const dataUrl = await generateQRDataURLAsync(qrUrl, 800);
+                      const a = document.createElement('a');
+                      a.href = dataUrl;
+                      a.download = `QR-${activeCafe?.slug}-${qrModalTable.name.replace(/\s+/g, '_')}.png`;
+                      a.click();
+                      showToast('High-resolution QR code downloaded (800px PNG).', 'success');
+                    }}
+                  >
+                    Save PNG (800px)
+                  </Button>
+                </div>
+
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <Button
+                    fullWidth
+                    variant="danger"
+                    icon={<RefreshCw size={15} />}
+                    onClick={() => {
+                      if (
+                        confirm(
+                          `Reset QR token for "${qrModalTable.name}"?\n\nOld printed QR codes will stop functioning immediately. You must reprint a new card.`
+                        )
+                      ) {
+                        handleResetToken(qrModalTable.id);
+                      }
+                    }}
+                  >
+                    Reset QR Token (Invalidate Old Code)
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+        </Modal>
       )}
 
-      {qrTable && activeCafe && (
-        <QRModal
-          table={qrTable}
-          cafe={activeCafe}
-          onClose={() => setQrTable(null)}
-          onResetToken={handleResetToken}
-        />
+      {/* ─── RENAME TABLE MODAL ─────────────────────────────────────────────── */}
+      {renameModalTable && (
+        <Modal
+          isOpen={!!renameModalTable}
+          onClose={() => setRenameModalTable(null)}
+          title={`Rename ${renameModalTable.name}`}
+        >
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const newName = e.target.tableName.value.trim();
+              if (!newName) return;
+              const res = await handleUpdate(renameModalTable.id, { name: newName });
+              if (res.success) setRenameModalTable(null);
+            }}
+          >
+            <Input
+              name="tableName"
+              label="New Table Name"
+              defaultValue={renameModalTable.name}
+              required
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+              <Button variant="ghost" type="button" onClick={() => setRenameModalTable(null)}>
+                Cancel
+              </Button>
+              <Button type="submit">Save Name</Button>
+            </div>
+          </form>
+        </Modal>
       )}
 
-      {renameTable && (
-        <EditNameModal
-          table={renameTable}
-          onSave={handleUpdate}
-          onClose={() => setRenameTable(null)}
-        />
-      )}
-
-      <style>{`
-        .t-icon-btn {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 34px;
-          height: 34px;
-          min-height: 34px;
-          padding: 0;
-          border-radius: 8px;
-          background: var(--bg);
-          border: 1px solid var(--border);
-          color: var(--text-muted);
-          cursor: pointer;
-          font-size: 14px;
-          transition: all 0.15s;
-        }
-        .t-icon-btn:hover:not(:disabled) {
-          transform: translateY(-1px);
-          box-shadow: var(--shadow-sm);
-        }
-        .t-modal-overlay {
-          position: fixed;
-          inset: 0;
-          background: rgba(0,0,0,0.45);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 1000;
-          padding: 16px;
-        }
-        .t-modal-box {
-          background: var(--card-bg);
-          border-radius: var(--radius-lg);
-          padding: 20px;
-          width: 100%;
-          box-shadow: var(--shadow-lg);
-        }
-        .t-modal-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          margin-bottom: 4px;
-        }
-        .t-table-row:hover {
-          background: var(--primary-light);
-        }
-        .t-table-row:last-child {
-          border-bottom: none !important;
-        }
-      `}</style>
-    </div>
+      {/* ─── CONFIRM DELETE DIALOG ──────────────────────────────────────────── */}
+      <ConfirmDialog
+        isOpen={!!deleteConfirmTable}
+        onClose={() => setDeleteConfirmTable(null)}
+        onConfirm={handleDelete}
+        title={`Delete "${deleteConfirmTable?.name}"?`}
+        message="This table's QR code will permanently stop functioning and will be removed from your order stations."
+        confirmText="Delete Table"
+        danger
+      />
+    </AppShell>
   );
 }

@@ -1,7 +1,15 @@
 import React, { useEffect } from 'react';
-import { Icon } from './Icons';
+import { IconButton } from './Button';
+import { X } from 'lucide-react';
 
-export function BottomSheet({ isOpen, onClose, title, children, maxHeight = '85vh' }) {
+export function BottomSheet({
+  isOpen,
+  onClose,
+  title,
+  subtitle,
+  children,
+  maxHeight = '88vh',
+}) {
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = 'hidden';
@@ -23,46 +31,76 @@ export function BottomSheet({ isOpen, onClose, title, children, maxHeight = '85v
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.6)',
-        backdropFilter: 'blur(3px)',
+        backgroundColor: 'rgba(43, 29, 20, 0.6)',
+        backdropFilter: 'blur(5px)',
         zIndex: 1000,
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'flex-end',
-        transition: 'opacity 0.2s ease',
       }}
       onClick={onClose}
     >
       <div
+        className="anim-slide-up"
         style={{
-          backgroundColor: 'var(--card-bg, #ffffff)',
-          borderTopLeftRadius: 20,
-          borderTopRightRadius: 20,
-          padding: '16px 20px 28px',
+          backgroundColor: 'var(--color-foam)',
+          borderTopLeftRadius: 'var(--radius-sheet)',
+          borderTopRightRadius: 'var(--radius-sheet)',
+          padding: '16px 24px 32px',
           maxHeight,
           overflowY: 'auto',
           width: '100%',
-          maxWidth: 600,
+          maxWidth: 620,
           margin: '0 auto',
-          boxShadow: '0 -8px 30px rgba(0, 0, 0, 0.15)',
-          animation: 'slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+          boxShadow: 'var(--shadow-float)',
+          borderTop: '1px solid var(--color-line)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Drag handle */}
-        <div style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: '#d5cfc7', margin: '0 auto 14px' }} />
+        {/* Grab bar */}
+        <div
+          style={{
+            width: 44,
+            height: 4,
+            borderRadius: 999,
+            backgroundColor: 'var(--color-line)',
+            margin: '0 auto 16px',
+          }}
+        />
 
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: 'var(--text)' }}>{title}</h2>
-          <button
-            className="ghost"
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            marginBottom: 20,
+            gap: 12,
+          }}
+        >
+          <div>
+            <h2
+              style={{
+                fontSize: 20,
+                fontWeight: 700,
+                margin: 0,
+                color: 'var(--color-espresso)',
+                fontFamily: 'var(--font-serif)',
+              }}
+            >
+              {title}
+            </h2>
+            {subtitle && (
+              <p style={{ fontSize: 13, color: 'var(--color-muted)', marginTop: 2 }}>{subtitle}</p>
+            )}
+          </div>
+          <IconButton
+            icon={<X size={18} />}
             onClick={onClose}
-            style={{ width: 36, height: 36, minHeight: 36, padding: 0, borderRadius: '50%' }}
-            aria-label="Close"
-          >
-            <Icon name="x" size={18} />
-          </button>
+            aria-label="Close sheet"
+            variant="ghost"
+            size={36}
+          />
         </div>
 
         <div>{children}</div>
