@@ -15,6 +15,7 @@ import {
   Search,
   ShoppingBag,
   Plus,
+  Minus,
   Clock,
   Sparkles,
   CheckCircle2,
@@ -29,6 +30,9 @@ import {
   ClipboardList,
   WifiOff,
   RotateCw,
+  Edit2,
+  Trash2,
+  XCircle,
 } from 'lucide-react';
 
 export function getOrderStep(order) {
@@ -62,6 +66,64 @@ export function formatOrderTime(dateStr) {
   } catch {
     return '';
   }
+}
+
+export function getDeviceKey(cafeSlug) {
+  if (typeof window === 'undefined') return '';
+  const keyName = `deviceKey:${cafeSlug}`;
+  try {
+    let key = localStorage.getItem(keyName);
+    if (!key) {
+      key =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : Math.random().toString(36).substring(2) + Date.now().toString(36);
+      localStorage.setItem(keyName, key);
+    }
+    return key;
+  } catch {
+    return '';
+  }
+}
+
+export function mapOrderError(err, isAmharic = false) {
+  const raw = typeof err === 'string' ? err : err?.message || err?.details || '';
+  const code = raw.toLowerCase();
+  if (code.includes('order_in_progress')) {
+    return isAmharic
+      ? 'ባሩ ትዕዛዝዎን ማዘጋጀት ጀምሯል። እባክዎን ሰራተኞቹን ለውጥ እንዲያደርጉ ይጠይቁ።'
+      : 'The bar has already started your order. Please ask the staff to change it.';
+  }
+  if (code.includes('order_closed')) {
+    return isAmharic ? 'ይህ ትዕዛዝ አስቀድሞ ተጠናቋል።' : 'This order is already finished.';
+  }
+  if (code.includes('order_not_found')) {
+    return isAmharic ? 'ትዕዛዙ አልተገኘም።' : 'We could not find this order.';
+  }
+  if (code.includes('too_many_edits')) {
+    return isAmharic
+      ? 'ይህንን ትዕዛዝ ደጋግመው ቀይረዋል። እባክዎን ሰራተኞቹን ይጠይቁ።'
+      : 'You changed this order too many times. Please ask the staff.';
+  }
+  if (code.includes('item_unavailable')) {
+    return isAmharic
+      ? 'አንዳንድ እቃዎች በአሁኑ ወቅት አይገኙም። እባክዎ ትዕዛዝዎን ይመልከቱ።'
+      : 'An item is no longer available. Please check your order.';
+  }
+  if (code.includes('invalid_quantity') || code.includes('invalid_items')) {
+    return isAmharic
+      ? 'በትዕዛዝዎ ላይ ስህተት ተከስቷል። እባክዎ እንደገና ይሞክሩ።'
+      : 'Something is wrong with your order. Please try again.';
+  }
+  if (code.includes('not_allowed')) {
+    return isAmharic ? 'ይህንን ለማድረግ ፈቃድ የለዎትም።' : 'You do not have permission to do that.';
+  }
+  if (code.includes('network') || code.includes('fetch') || code.includes('failed to fetch')) {
+    return isAmharic
+      ? 'የኢንተርኔት ግንኙነት የለም። እባክዎ ግንኙነትዎን ፈትሸው እንደገና ይሞክሩ።'
+      : 'No connection. Please check your internet and try again.';
+  }
+  return raw || (isAmharic ? 'ስህተት ተከስቷል፣ እባክዎ እንደገና ይሞክሩ።' : 'An error occurred. Please try again.');
 }
 
 function OrderStepper({ step, isAmharic, t }) {
@@ -241,6 +303,16 @@ export default function CustomerMenuPage() {
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [toastMessage, setToastMessage] = useState(null);
 
+  // Customer Edit & Cancel Order State
+  const [editingOrder, setEditingOrder] = useState(null);
+  const [editItems, setEditItems] = useState([]);
+  const [editOrderNote, setEditOrderNote] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [cancellingOrderId, setCancellingOrderId] = useState(null);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(null);
+  const [showAddItemInEdit, setShowAddItemInEdit] = useState(false);
+  const [addItemSearch, setAddItemSearch] = useState('');
+
   const prevOrderStepsRef = useRef({});
   const toastTimerRef = useRef(null);
 
@@ -255,7 +327,7 @@ export default function CustomerMenuPage() {
   // Read URL table token
   const urlToken = searchParams.get('t') || searchParams.get('table');
 
-  // Fetch and sync table orders
+  // Fetch and sync table orders for this phone's device_key
   const fetchTableOrders = useCallback(async (explicitToken = null) => {
     const token =
       explicitToken ||
@@ -264,49 +336,45 @@ export default function CustomerMenuPage() {
 
     if (!token) return;
 
+    const deviceKey = getDeviceKey(slug);
+    if (!deviceKey) return;
+
+    // Clean up any legacy table_orders cache
     try {
-      const { data: ordersData, error } = await supabase.rpc('get_table_orders', {
+      localStorage.removeItem(`table_orders_${slug}_${token}`);
+      localStorage.removeItem(`table_order_ids_${slug}_${token}`);
+    } catch {}
+
+    try {
+      const { data: ordersData, error } = await supabase.rpc('get_my_orders', {
         p_token: token,
-        p_hours: 6,
+        p_device_key: deviceKey,
       });
 
       if (error) {
-        console.warn('get_table_orders error:', error);
+        console.warn('get_my_orders error:', error);
         setOrdersError(true);
         return;
       }
 
       setOrdersError(false);
 
-      if (ordersData) {
-        // Read any cached local orders
-        let localCached = [];
-        try {
-          const raw = localStorage.getItem(`table_orders_${slug}_${token}`);
-          if (raw) localCached = JSON.parse(raw);
-        } catch {}
-
-        // Merge: keep local orders that might not yet be returned by DB
-        const dbIds = new Set(ordersData.map((o) => o.id));
-        const localOnly = Array.isArray(localCached) ? localCached.filter((o) => !dbIds.has(o.id)) : [];
-        const merged = [...localOnly, ...ordersData];
-
+      if (ordersData && Array.isArray(ordersData)) {
         // Check for transition to ready
-        merged.forEach((order) => {
+        ordersData.forEach((order) => {
           const currentStep = getOrderStep(order);
           const prevStep = prevOrderStepsRef.current[order.id];
           if (prevStep !== undefined && prevStep < 3 && currentStep === 3) {
-            showToast(t('menu.order_ready_toast') || (isAmharic ? 'ትዕዛዝዎ ዝግጁ ነው! ሊወስዱት ይችላሉ።' : 'Your order is Ready! Please collect it.'));
+            showToast(
+              t('menu.order_ready_toast') ||
+                (isAmharic ? 'ትዕዛዝዎ ዝግጁ ነው! ሊወስዱት ይችላሉ።' : 'Your order is Ready! Please collect it.')
+            );
           }
           prevOrderStepsRef.current[order.id] = currentStep;
         });
 
-        setTableOrders(merged);
-
-        try {
-          localStorage.setItem(`table_orders_${slug}_${token}`, JSON.stringify(merged));
-          localStorage.setItem(`table_order_ids_${slug}_${token}`, JSON.stringify(merged.map((o) => o.id)));
-        } catch {}
+        // Set table orders strictly from get_my_orders
+        setTableOrders(ordersData);
       }
     } catch (err) {
       console.warn('fetchTableOrders exception:', err);
@@ -423,21 +491,13 @@ export default function CustomerMenuPage() {
                 sessionStorage.setItem(`welcome_seen_${slug}_${activeToken}`, 'true');
               }
 
-              // Instant cache display from localStorage
+              // Clean up any legacy order cache from localStorage
               try {
-                const cachedOrders = localStorage.getItem(`table_orders_${slug}_${activeToken}`);
-                if (cachedOrders) {
-                  const parsed = JSON.parse(cachedOrders);
-                  if (Array.isArray(parsed) && parsed.length > 0) {
-                    setTableOrders(parsed);
-                    parsed.forEach((o) => {
-                      prevOrderStepsRef.current[o.id] = getOrderStep(o);
-                    });
-                  }
-                }
+                localStorage.removeItem(`table_orders_${slug}_${activeToken}`);
+                localStorage.removeItem(`table_order_ids_${slug}_${activeToken}`);
               } catch {}
 
-              // Fetch fresh orders from DB
+              // Fetch private orders from DB for this device_key
               fetchTableOrders(activeToken);
             }
           }
@@ -563,6 +623,181 @@ export default function CustomerMenuPage() {
     };
   }, [table?.token, slug, hasOpenOrder, fetchTableOrders, loadMenuData]);
 
+  // Part B: Orders countdown ticker (paid and cancelled orders countdown and auto-fade out)
+  useEffect(() => {
+    const hasExpiring = tableOrders.some(
+      (o) => (o.status === 'paid' || o.status === 'cancelled') && typeof o.seconds_left === 'number'
+    );
+    if (!hasExpiring) return;
+
+    const timer = setInterval(() => {
+      setTableOrders((prev) => {
+        let changed = false;
+        const updated = [];
+        for (const o of prev) {
+          if ((o.status === 'paid' || o.status === 'cancelled') && typeof o.seconds_left === 'number') {
+            const nextSec = o.seconds_left - 1;
+            if (nextSec <= 0) {
+              changed = true;
+              continue; // Exclude expired card; auto-fades and is removed
+            }
+            changed = true;
+            updated.push({ ...o, seconds_left: nextSec });
+          } else {
+            updated.push(o);
+          }
+        }
+        return changed ? updated : prev;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [tableOrders]);
+
+  // Part C: Open Edit Order BottomSheet
+  const openEditOrderSheet = (order) => {
+    if (!order) return;
+    setEditingOrder(order);
+    const initialItems = (order.items || []).map((it) => ({
+      item_id: it.item_id || it.id,
+      name: it.name,
+      qty: it.qty || 1,
+      price: Number(it.price || 0),
+      note: it.note || '',
+    }));
+    setEditItems(initialItems);
+    setEditOrderNote(order.note || '');
+    setShowAddItemInEdit(false);
+    setAddItemSearch('');
+  };
+
+  const handleEditItemQty = (index, delta) => {
+    setEditItems((prev) => {
+      const copy = [...prev];
+      const item = copy[index];
+      if (!item) return prev;
+      const nextQty = item.qty + delta;
+      if (nextQty <= 0) {
+        copy.splice(index, 1);
+      } else {
+        copy[index] = { ...item, qty: nextQty };
+      }
+      return copy;
+    });
+  };
+
+  const handleEditItemNote = (index, noteVal) => {
+    setEditItems((prev) => {
+      const copy = [...prev];
+      if (copy[index]) {
+        copy[index] = { ...copy[index], note: noteVal };
+      }
+      return copy;
+    });
+  };
+
+  const handleAddItemToEdit = (menuItem) => {
+    setEditItems((prev) => {
+      const idx = prev.findIndex((i) => i.item_id === menuItem.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], qty: copy[idx].qty + 1 };
+        return copy;
+      }
+      return [
+        ...prev,
+        {
+          item_id: menuItem.id,
+          name: menuItem.name,
+          qty: 1,
+          price: Number(menuItem.price || 0),
+          note: '',
+        },
+      ];
+    });
+    setShowAddItemInEdit(false);
+    setAddItemSearch('');
+  };
+
+  // Save changes via customer_edit_order
+  const handleSaveCustomerEdit = async () => {
+    if (!editingOrder) return;
+    const deviceKey = getDeviceKey(slug);
+    if (!deviceKey) return;
+
+    if (editItems.length === 0) {
+      alert(isAmharic ? 'ቢያንስ አንድ እቃ በትዕዛዝዎ ውስጥ መኖር አለበት።' : 'At least one item must remain in your order.');
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      const pItems = editItems.map((i) => ({
+        item_id: i.item_id,
+        qty: i.qty,
+        note: i.note || '',
+      }));
+
+      const { data, error } = await supabase.rpc('customer_edit_order', {
+        p_order_id: editingOrder.id,
+        p_device_key: deviceKey,
+        p_items: pItems,
+        p_note: editOrderNote.trim(),
+      });
+
+      if (error) {
+        const msg = mapOrderError(error, isAmharic);
+        if ((error.message || '').toLowerCase().includes('order_in_progress')) {
+          setEditingOrder(null);
+          showToast(msg);
+          await fetchTableOrders(table?.token);
+          return;
+        }
+        alert(msg);
+        return;
+      }
+
+      setEditingOrder(null);
+      showToast(t('menu.order_updated_toast') || (isAmharic ? 'ትዕዛዝዎ ተስተካክሏል' : 'Order updated'));
+      await fetchTableOrders(table?.token);
+    } catch (err) {
+      alert(mapOrderError(err, isAmharic));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  // Cancel customer order via customer_cancel_order
+  const handleCancelCustomerOrder = async (order) => {
+    if (!order) return;
+    const deviceKey = getDeviceKey(slug);
+    if (!deviceKey) return;
+
+    setCancellingOrderId(order.id);
+    try {
+      const { data, error } = await supabase.rpc('customer_cancel_order', {
+        p_order_id: order.id,
+        p_device_key: deviceKey,
+      });
+
+      if (error) {
+        alert(mapOrderError(error, isAmharic));
+        return;
+      }
+
+      setShowCancelConfirm(null);
+      if (editingOrder?.id === order.id) {
+        setEditingOrder(null);
+      }
+      showToast(t('menu.order_cancelled_toast') || (isAmharic ? 'ትዕዛዝዎ ተሰርዟል' : 'Order cancelled'));
+      await fetchTableOrders(table?.token);
+    } catch (err) {
+      alert(mapOrderError(err, isAmharic));
+    } finally {
+      setCancellingOrderId(null);
+    }
+  };
+
   // Menu periodic refresh every 30s as safety net
   useEffect(() => {
     const interval = setInterval(() => {
@@ -628,10 +863,16 @@ export default function CustomerMenuPage() {
   // Send Order
   const handlePlaceOrder = async () => {
     if (!table?.token) {
-      alert('Please scan a valid table QR code to place an order.');
+      alert(isAmharic ? 'እባክዎን ትዕዛዝ ለማስገባት የጠረጴዛውን QR ኮድ ይቃኙ።' : 'Please scan a valid table QR code to place an order.');
       return;
     }
     if (cart.length === 0) return;
+
+    const deviceKey = getDeviceKey(slug);
+    if (!deviceKey) {
+      alert(isAmharic ? 'የስልክ መለያ ማግኘት አልተቻለም። እባክዎ ገጹን ያድሱ።' : 'Device key could not be initialized. Please refresh the page.');
+      return;
+    }
 
     setSubmittingOrder(true);
     try {
@@ -641,49 +882,26 @@ export default function CustomerMenuPage() {
         note: i.note || '',
       }));
 
-      const { data, error } = await supabase.rpc('place_order', {
+      const { data, error } = await supabase.rpc('place_order_v2', {
         p_token: table.token,
         p_items: pItems,
         p_note: orderNote.trim(),
+        p_device_key: deviceKey,
       });
 
       if (error) {
-        alert(error.message || 'Failed to place order.');
+        alert(mapOrderError(error, isAmharic));
         return;
       }
 
       if (data?.order_id) {
-        const newOrder = {
-          id: data.order_id,
-          table_name: data.table_name || table.name,
-          status: 'open',
-          note: orderNote.trim(),
-          created_at: new Date().toISOString(),
-          items: cart.map((i) => ({
-            name: i.name,
-            qty: i.qty,
-            price: Number(i.price || 0),
-            note: i.note || '',
-          })),
-          stations: [{ station: 'bar', status: 'new' }],
-        };
-        prevOrderStepsRef.current[newOrder.id] = 1;
-        setTableOrders((prev) => {
-          const updated = [newOrder, ...prev.filter((o) => o.id !== newOrder.id)];
-          try {
-            localStorage.setItem(`table_orders_${slug}_${table.token}`, JSON.stringify(updated));
-            localStorage.setItem(`table_order_ids_${slug}_${table.token}`, JSON.stringify(updated.map((o) => o.id)));
-          } catch {}
-          return updated;
-        });
-        setActiveOrder(newOrder);
         setCart([]);
         setCartOpen(false);
         setOrderSuccessModal(true);
-        fetchTableOrders(table.token);
+        await fetchTableOrders(table.token);
       }
     } catch (err) {
-      alert(err.message || 'Error submitting order');
+      alert(mapOrderError(err, isAmharic));
     } finally {
       setSubmittingOrder(false);
     }
@@ -1786,6 +2004,119 @@ export default function CustomerMenuPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {tableOrders.map((order) => {
               const orderStep = getOrderStep(order);
+              const isPaid = order.status === 'paid';
+              const isCancelled = order.status === 'cancelled';
+              const hasCountdown = typeof order.seconds_left === 'number';
+
+              // Part B: Paid state card
+              if (isPaid) {
+                return (
+                  <div
+                    key={order.id}
+                    style={{
+                      border: '1.5px solid var(--color-sage)',
+                      borderRadius: 'var(--radius-card)',
+                      padding: 16,
+                      backgroundColor: 'rgba(107, 143, 113, 0.08)',
+                      boxShadow: 'var(--shadow-sm)',
+                      transition: 'opacity 0.4s ease',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <CheckCircle2 size={18} color="var(--color-sage)" />
+                        <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--color-sage)' }}>
+                          {t('menu.order_paid_thank_you') || (isAmharic ? 'ተከፍሏል። እናመሰግናለን!' : 'Paid. Thank you!')}
+                        </span>
+                      </div>
+                      <span style={{ fontSize: 11, color: 'var(--color-muted)' }}>
+                        {formatOrderTime(order.created_at)}
+                      </span>
+                    </div>
+
+                    <div style={{ marginTop: 8, fontSize: 12, color: 'var(--color-muted)' }}>
+                      {(order.items || []).map((it) => `${it.qty}× ${pick(it.name, lang, cafe?.default_language)}`).join(', ')}
+                    </div>
+
+                    {hasCountdown && (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--color-muted)', marginBottom: 4 }}>
+                          <span>{t('menu.closing_soon') || (isAmharic ? 'በቅርቡ ይጠፋል' : 'Closing soon')}</span>
+                          <span>{order.seconds_left}s</span>
+                        </div>
+                        <div style={{ height: 3, width: '100%', backgroundColor: 'rgba(0,0,0,0.06)', borderRadius: 2, overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${Math.max(0, Math.min(100, (order.seconds_left / 60) * 100))}%`,
+                              backgroundColor: 'var(--color-sage)',
+                              transition: 'width 1s linear',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              // Part B: Cancelled state card
+              if (isCancelled) {
+                return (
+                  <div
+                    key={order.id}
+                    style={{
+                      border: '1.5px solid rgba(196, 85, 61, 0.35)',
+                      borderRadius: 'var(--radius-card)',
+                      padding: 16,
+                      backgroundColor: 'rgba(196, 85, 61, 0.06)',
+                      boxShadow: 'var(--shadow-sm)',
+                      transition: 'opacity 0.4s ease',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <AlertCircle size={18} color="var(--color-terracotta)" />
+                        <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--color-terracotta)' }}>
+                          {order.cancelled_by === 'staff'
+                            ? (t('menu.cancelled_by_staff') || (isAmharic ? 'በሰራተኛ ተሰርዟል' : 'Cancelled by staff'))
+                            : (t('menu.cancelled_by_you') || (isAmharic ? 'ተሰርዟል' : 'Cancelled'))}
+                        </span>
+                      </div>
+                      <span style={{ fontSize: 11, color: 'var(--color-muted)' }}>
+                        {formatOrderTime(order.created_at)}
+                      </span>
+                    </div>
+
+                    {order.cancel_reason && (
+                      <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-terracotta)', fontWeight: 600 }}>
+                        {isAmharic ? 'ምክንያት፡ ' : 'Reason: '} {order.cancel_reason}
+                      </div>
+                    )}
+
+                    {hasCountdown && (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--color-muted)', marginBottom: 4 }}>
+                          <span>{t('menu.closing_soon') || (isAmharic ? 'በቅርቡ ይጠፋል' : 'Closing soon')}</span>
+                          <span>{order.seconds_left}s</span>
+                        </div>
+                        <div style={{ height: 3, width: '100%', backgroundColor: 'rgba(0,0,0,0.06)', borderRadius: 2, overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${Math.max(0, Math.min(100, (order.seconds_left / 60) * 100))}%`,
+                              backgroundColor: 'var(--color-terracotta)',
+                              transition: 'width 1s linear',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              // Active & Served orders card
               return (
                 <div
                   key={order.id}
@@ -1806,7 +2137,7 @@ export default function CustomerMenuPage() {
                       marginBottom: 8,
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-espresso)' }}>
                         {order.table_name || table?.name || (isAmharic ? 'ጠረጴዛ' : 'Table')}
                       </span>
@@ -1841,10 +2172,38 @@ export default function CustomerMenuPage() {
                           ? (t('menu.order_preparing') || (isAmharic ? 'በመዘጋጀት ላይ' : 'Being prepared'))
                           : orderStep === 4
                           ? (t('menu.order_served') || (isAmharic ? 'ቀርቧል' : 'Served'))
-                          : orderStep === -1
-                          ? (isAmharic ? 'ተሰርዟል' : 'Cancelled')
                           : (t('menu.order_received') || (isAmharic ? 'ደርሷል' : 'Received'))}
                       </span>
+
+                      {/* Part C: Edited badges */}
+                      {order.edited_by === 'staff' && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            backgroundColor: 'rgba(227, 163, 43, 0.2)',
+                            color: 'var(--color-amber)',
+                          }}
+                        >
+                          {t('menu.updated_by_staff') || (isAmharic ? 'በሰራተኛ ተቀይሯል' : 'Updated by staff')}
+                        </span>
+                      )}
+                      {order.edited_by === 'customer' && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            backgroundColor: 'rgba(201, 138, 75, 0.2)',
+                            color: 'var(--color-caramel)',
+                          }}
+                        >
+                          {t('menu.updated_by_you') || (isAmharic ? 'ተቀይሯል' : 'Updated')}
+                        </span>
+                      )}
                     </div>
                     <span style={{ fontSize: 11, color: 'var(--color-muted)' }}>
                       {formatOrderTime(order.created_at)}
@@ -1920,7 +2279,60 @@ export default function CustomerMenuPage() {
                       </span>
                       <span style={{ color: 'var(--color-espresso)' }}>
                         {order.items.reduce((s, it) => s + Number(it.price || 0) * it.qty, 0).toFixed(2)}{' '}
-                        {cafe.currency || 'ETB'}
+                        {cafe?.currency || 'ETB'}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Part C: Edit and Cancel Buttons (if editable) or bar notice */}
+                  {order.editable === true && (
+                    <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+                      <Button
+                        variant="secondary"
+                        size="md"
+                        fullWidth
+                        style={{ minHeight: 44, fontWeight: 700 }}
+                        onClick={() => openEditOrderSheet(order)}
+                        disabled={savingEdit || cancellingOrderId === order.id}
+                        iconLeft={<Edit2 size={15} />}
+                      >
+                        {t('menu.edit_order') || (isAmharic ? 'ትዕዛዝ አርትዕ' : 'Edit order')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="md"
+                        fullWidth
+                        style={{ minHeight: 44, color: 'var(--color-terracotta)', fontWeight: 700 }}
+                        onClick={() => setShowCancelConfirm(order)}
+                        disabled={savingEdit || cancellingOrderId === order.id}
+                        iconLeft={<XCircle size={15} />}
+                      >
+                        {t('menu.cancel_order') || (isAmharic ? 'ትዕዛዝ ሰርዝ' : 'Cancel order')}
+                      </Button>
+                    </div>
+                  )}
+
+                  {order.editable === false && order.status === 'open' && (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: '8px 12px',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: 'rgba(0,0,0,0.03)',
+                        color: 'var(--color-muted)',
+                        fontSize: 12,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      <Info size={15} style={{ flexShrink: 0, color: 'var(--color-caramel)' }} />
+                      <span>
+                        {t('menu.bar_started_notice') ||
+                          (isAmharic
+                            ? 'ባሩ ትዕዛዝዎን ማዘጋጀት ጀምሯል። እባክዎን ሰራተኞቹን ለውጥ እንዲያደርጉ ይጠይቁ።'
+                            : 'The bar has started your order. Please ask the staff to change it.')}
                       </span>
                     </div>
                   )}
@@ -1930,6 +2342,336 @@ export default function CustomerMenuPage() {
           </div>
         )}
       </BottomSheet>
+
+      {/* ─── PART C: EDIT ORDER BOTTOM SHEET ─────────────────────────────────── */}
+      <BottomSheet
+        isOpen={!!editingOrder}
+        onClose={() => setEditingOrder(null)}
+        title={t('menu.edit_order') || (isAmharic ? 'ትዕዛዝ አርትዕ' : 'Edit Order')}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingBottom: 16 }}>
+          {/* Items list */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {editItems.map((item, idx) => (
+              <div
+                key={idx}
+                style={{
+                  border: '1px solid var(--color-line)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: 12,
+                  backgroundColor: 'var(--color-card)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--color-espresso)' }}>
+                      {pick(item.name, lang, cafe?.default_language)}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--color-muted)' }}>
+                      {Number(item.price).toFixed(2)} {cafe?.currency || 'ETB'}
+                    </div>
+                  </div>
+
+                  {/* Quantity stepper: reducing to 0 removes line */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => handleEditItemQty(idx, -1)}
+                      style={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: '50%',
+                        border: '1px solid var(--color-line)',
+                        backgroundColor: 'var(--color-foam)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        color: 'var(--color-espresso)',
+                      }}
+                      title="Decrease"
+                    >
+                      {item.qty === 1 ? <Trash2 size={14} color="var(--color-terracotta)" /> : <Minus size={14} />}
+                    </button>
+                    <span style={{ fontWeight: 800, fontSize: 15, minWidth: 20, textAlign: 'center' }}>
+                      {item.qty}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleEditItemQty(idx, 1)}
+                      style={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: '50%',
+                        border: '1px solid var(--color-line)',
+                        backgroundColor: 'var(--color-foam)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        color: 'var(--color-espresso)',
+                      }}
+                      title="Increase"
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Line note field */}
+                <input
+                  type="text"
+                  value={item.note || ''}
+                  onChange={(e) => handleEditItemNote(idx, e.target.value)}
+                  placeholder={isAmharic ? 'ለዚህ እቃ ማስታወሻ...' : 'Note for this item...'}
+                  style={{
+                    fontSize: 12,
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    border: '1px solid var(--color-line)',
+                    backgroundColor: 'var(--color-foam)',
+                    color: 'var(--color-espresso)',
+                    width: '100%',
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* Add more items button & search picker */}
+          {!showAddItemInEdit ? (
+            <Button
+              variant="secondary"
+              size="md"
+              fullWidth
+              style={{ minHeight: 44, fontWeight: 700 }}
+              onClick={() => setShowAddItemInEdit(true)}
+              iconLeft={<Plus size={16} />}
+            >
+              {t('menu.add_more_items') || (isAmharic ? 'ተጨማሪ እቃዎችን ጨምር' : 'Add more items')}
+            </Button>
+          ) : (
+            <div
+              style={{
+                border: '1.5px dashed var(--color-caramel)',
+                borderRadius: 'var(--radius-sm)',
+                padding: 12,
+                backgroundColor: 'rgba(201, 138, 75, 0.05)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--color-espresso)' }}>
+                  {isAmharic ? 'ከሜኑ ምረጥ' : 'Select from Menu'}
+                </span>
+                <button
+                  onClick={() => setShowAddItemInEdit(false)}
+                  style={{ background: 'none', border: 'none', color: 'var(--color-muted)', cursor: 'pointer', fontSize: 12 }}
+                >
+                  {isAmharic ? 'ዝጋ' : 'Close'}
+                </button>
+              </div>
+
+              <input
+                type="text"
+                value={addItemSearch}
+                onChange={(e) => setAddItemSearch(e.target.value)}
+                placeholder={isAmharic ? 'እቃ ፈልግ...' : 'Search items to add...'}
+                style={{
+                  fontSize: 13,
+                  padding: '8px 12px',
+                  borderRadius: 6,
+                  border: '1px solid var(--color-line)',
+                  backgroundColor: '#FFF',
+                }}
+              />
+
+              <div style={{ maxHeight: 180, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {items
+                  .filter((i) => {
+                    if (!addItemSearch.trim()) return true;
+                    const name = pick(i.name, lang, cafe?.default_language) || '';
+                    return name.toLowerCase().includes(addItemSearch.toLowerCase().trim());
+                  })
+                  .slice(0, 10)
+                  .map((menuItem) => (
+                    <div
+                      key={menuItem.id}
+                      onClick={() => handleAddItemToEdit(menuItem)}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        backgroundColor: '#FFF',
+                        border: '1px solid var(--color-line)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>
+                        {pick(menuItem.name, lang, cafe?.default_language)}
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-caramel)' }}>
+                        +{Number(menuItem.price).toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          {/* Whole order note */}
+          <div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 4, color: 'var(--color-espresso)' }}>
+              {isAmharic ? 'የትዕዛዝ ማስታወሻ' : 'Order Instructions'}
+            </label>
+            <textarea
+              rows={2}
+              value={editOrderNote}
+              onChange={(e) => setEditOrderNote(e.target.value)}
+              placeholder={isAmharic ? 'ለሙሉ ትዕዛዙ ልዩ መመሪያ...' : 'Special instructions for the whole order...'}
+              style={{
+                width: '100%',
+                fontSize: 13,
+                padding: '8px 10px',
+                borderRadius: 8,
+                border: '1px solid var(--color-line)',
+                backgroundColor: 'var(--color-card)',
+                color: 'var(--color-espresso)',
+                fontFamily: 'inherit',
+              }}
+            />
+          </div>
+
+          {/* Total line */}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              paddingTop: 10,
+              borderTop: '1px solid var(--color-line)',
+              fontWeight: 800,
+              fontSize: 16,
+            }}
+          >
+            <span>{isAmharic ? 'አዲስ ድምር' : 'New Total'}</span>
+            <span style={{ color: 'var(--color-caramel)' }}>
+              {editItems.reduce((sum, it) => sum + Number(it.price || 0) * it.qty, 0).toFixed(2)}{' '}
+              {cafe?.currency || 'ETB'}
+            </span>
+          </div>
+
+          {/* Save / Cancel buttons */}
+          {editItems.length === 0 ? (
+            <Button
+              variant="danger"
+              size="lg"
+              fullWidth
+              style={{ minHeight: 48, fontWeight: 700 }}
+              onClick={() => handleCancelCustomerOrder(editingOrder)}
+              disabled={savingEdit}
+            >
+              {isAmharic ? 'ትዕዛዙን ሰርዝ' : 'Cancel this order instead'}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              size="lg"
+              fullWidth
+              style={{ minHeight: 48, fontWeight: 700 }}
+              onClick={handleSaveCustomerEdit}
+              disabled={savingEdit}
+            >
+              {savingEdit ? (isAmharic ? 'በመመዝገብ ላይ...' : 'Saving changes...') : (t('menu.save_changes') || (isAmharic ? 'ለውጦችን መዝግብ' : 'Save changes'))}
+            </Button>
+          )}
+        </div>
+      </BottomSheet>
+
+      {/* ─── PART C: CANCEL CONFIRMATION MODAL ───────────────────────────────── */}
+      {showCancelConfirm && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            backgroundColor: 'rgba(43, 29, 20, 0.7)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20,
+          }}
+        >
+          <div
+            className="card anim-fade-in"
+            style={{
+              maxWidth: 400,
+              width: '100%',
+              padding: 28,
+              textAlign: 'center',
+              borderRadius: 'var(--radius-card)',
+              backgroundColor: 'var(--color-foam)',
+            }}
+          >
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: '50%',
+                backgroundColor: 'rgba(196, 85, 61, 0.15)',
+                color: 'var(--color-terracotta)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 16px',
+              }}
+            >
+              <AlertCircle size={28} />
+            </div>
+
+            <h3 style={{ fontSize: 18, fontWeight: 800, color: 'var(--color-espresso)', marginBottom: 8 }}>
+              {t('menu.cancel_order_confirm') || (isAmharic ? 'ይህንን ትዕዛዝ መሰረዝ ይፈልጋሉ?' : 'Cancel this order?')}
+            </h3>
+
+            <p style={{ fontSize: 13, color: 'var(--color-muted)', lineHeight: 1.5, marginBottom: 20 }}>
+              {isAmharic
+                ? 'ትዕዛዙ ይሰረዛል እንዲሁም ከባርቴንደሩ ወረፋ ወዲያውኑ ይወገዳል።'
+                : 'This order will be cancelled and removed from the barista queue immediately.'}
+            </p>
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Button
+                variant="secondary"
+                size="md"
+                fullWidth
+                style={{ minHeight: 44 }}
+                onClick={() => setShowCancelConfirm(null)}
+                disabled={!!cancellingOrderId}
+              >
+                {isAmharic ? 'ይቅር' : 'Keep Order'}
+              </Button>
+              <Button
+                variant="danger"
+                size="md"
+                fullWidth
+                style={{ minHeight: 44, backgroundColor: 'var(--color-terracotta)', color: '#FFF' }}
+                onClick={() => handleCancelCustomerOrder(showCancelConfirm)}
+                disabled={!!cancellingOrderId}
+              >
+                {cancellingOrderId ? (isAmharic ? 'በመሰረዝ ላይ...' : 'Cancelling...') : (isAmharic ? 'አዎ ሰርዝ' : 'Yes, Cancel')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── ORDER PLACED CONFIRMATION MODAL ─────────────────────────────────── */}
       {orderSuccessModal && (

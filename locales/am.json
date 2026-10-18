@@ -77,7 +77,21 @@
     "too_many_orders": "አሁን ብዙ ጊዜ አዘዋል። እባክዎ ጥቂት ደቂቃ ይጠብቁ።",
     "item_unavailable": "አንዱ እቃ አልቋል። እባክዎ ትዕዛዝዎን ይመልከቱ።",
     "open_hours": "የስራ ሰዓታት",
-    "welcome": "እንኳን ደህና መጡ!"
+    "welcome": "እንኳን ደህና መጡ!",
+    "order_paid_thank_you": "ተከፍሏል። እናመሰግናለን!",
+    "edit_order": "ትዕዛዝ አርትዕ",
+    "cancel_order": "ትዕዛዝ ሰርዝ",
+    "cancel_order_confirm": "ይህንን ትዕዛዝ መሰረዝ ይፈልጋሉ?",
+    "bar_started_notice": "ባሩ ትዕዛዝዎን ማዘጋጀት ጀምሯል። እባክዎን ሰራተኞቹን ለውጥ እንዲያደርጉ ይጠይቁ።",
+    "updated_by_staff": "በሰራተኛ ተቀይሯል",
+    "updated_by_you": "ተቀይሯል",
+    "cancelled_by_staff": "በሰራተኛ ተሰርዟል",
+    "cancelled_by_you": "ተሰርዟል",
+    "order_updated_toast": "ትዕዛዝዎ ተስተካክሏል",
+    "order_cancelled_toast": "ትዕዛዝዎ ተሰርዟል",
+    "add_more_items": "ተጨማሪ እቃዎችን ጨምር",
+    "save_changes": "ለውጦችን መዝግብ",
+    "closing_soon": "በቅርቡ ይጠፋል"
   },
   "admin": {
     "tabs": {

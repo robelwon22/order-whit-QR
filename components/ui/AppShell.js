@@ -53,6 +53,7 @@ export function AppShell({
 
   const navItems = [
     { label: t('admin.tabs.menu') || 'Menu', href: '/admin', icon: Coffee },
+    { label: t('admin.tabs.orders') || 'Orders', href: '/admin/orders', icon: ShoppingBag },
     { label: t('admin.tabs.design') || 'Design', href: '/admin/design', icon: Palette },
     { label: t('admin.tabs.tables') || 'Tables & QR', href: '/admin/tables', icon: QrCode },
     { label: t('admin.tabs.staff') || 'Staff', href: '/admin/staff', icon: Users },

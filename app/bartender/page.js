@@ -23,6 +23,13 @@ import {
   CheckCircle2,
   DollarSign,
   XCircle,
+  Edit2,
+  Trash2,
+  Plus,
+  Minus,
+  MoreVertical,
+  X,
+  Search,
 } from 'lucide-react';
 
 // ─── ERROR BOUNDARY FOR INDIVIDUAL ORDER CARDS ─────────────────────────────
@@ -290,6 +297,180 @@ function BartenderDashboardInner() {
     } catch {}
   };
 
+  // Toast & Highlight State
+  const [toast, setToast] = useState(null);
+  const toastTimerRef = useRef(null);
+  const showBartenderToast = useCallback((msg) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(msg);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4500);
+  }, []);
+
+  const [highlightedOrderId, setHighlightedOrderId] = useState(null);
+
+  // Cafe menu items for bartender edit order search
+  const [cafeItems, setCafeItems] = useState([]);
+  useEffect(() => {
+    if (!me?.cafe_id) return;
+    supabase
+      .from('items')
+      .select('*')
+      .eq('cafe_id', me.cafe_id)
+      .order('sort_order')
+      .order('name')
+      .then(({ data }) => {
+        if (data) setCafeItems(data);
+      });
+  }, [me?.cafe_id]);
+
+  // Staff Edit Order State
+  const [editingOrder, setEditingOrder] = useState(null);
+  const [editItems, setEditItems] = useState([]);
+  const [editNote, setEditNote] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [addItemSearch, setAddItemSearch] = useState('');
+
+  const handleOpenStaffEdit = (order) => {
+    const lines = orderItemsMap[order.id] || [];
+    setEditingOrder(order);
+    setEditItems(
+      lines.map((it) => ({
+        item_id: it.item_id || it.id,
+        name: it.item_name || it.name,
+        qty: it.quantity || it.qty || 1,
+        note: it.note || '',
+      }))
+    );
+    setEditNote(order.note || '');
+    setAddItemSearch('');
+  };
+
+  const handleStaffEditItemQty = (idx, delta) => {
+    setEditItems((prev) => {
+      const copy = [...prev];
+      const item = copy[idx];
+      if (!item) return prev;
+      const nextQty = item.qty + delta;
+      if (nextQty <= 0) {
+        copy.splice(idx, 1);
+      } else {
+        copy[idx] = { ...item, qty: nextQty };
+      }
+      return copy;
+    });
+  };
+
+  const handleStaffEditItemNote = (idx, noteVal) => {
+    setEditItems((prev) => {
+      const copy = [...prev];
+      if (copy[idx]) {
+        copy[idx] = { ...copy[idx], note: noteVal };
+      }
+      return copy;
+    });
+  };
+
+  const handleStaffAddItem = (item) => {
+    setEditItems((prev) => {
+      const idx = prev.findIndex((i) => i.item_id === item.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], qty: copy[idx].qty + 1 };
+        return copy;
+      }
+      return [
+        ...prev,
+        {
+          item_id: item.id,
+          name: item.name,
+          qty: 1,
+          note: '',
+        },
+      ];
+    });
+  };
+
+  const handleSaveStaffEdit = async () => {
+    if (!editingOrder) return;
+    if (editItems.length === 0) {
+      alert('At least one item must remain in the order. Or cancel the order instead.');
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      const pItems = editItems.map((i) => ({
+        item_id: i.item_id,
+        qty: i.qty,
+        note: i.note || '',
+      }));
+
+      const { data, error } = await supabase.rpc('staff_edit_order', {
+        p_order_id: editingOrder.id,
+        p_items: pItems,
+        p_note: editNote.trim(),
+      });
+
+      if (error) {
+        alert(error.message || 'Failed to edit order.');
+        return;
+      }
+
+      setEditingOrder(null);
+      showBartenderToast(`Order #${String(editingOrder.id).slice(0, 6)} updated`);
+      await loadOrders();
+    } catch (err) {
+      alert(err.message || 'Error updating order');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  // Staff Cancel Order State
+  const [cancellingOrder, setCancellingOrder] = useState(null);
+  const [cancelReason, setCancelReason] = useState('Customer changed their mind');
+  const [cancelCustomReason, setCancelCustomReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+
+  const handleOpenStaffCancel = (order) => {
+    setCancellingOrder(order);
+    setCancelReason('Customer changed their mind');
+    setCancelCustomReason('');
+  };
+
+  const handleConfirmStaffCancel = async () => {
+    if (!cancellingOrder) return;
+    const finalReason = cancelReason === 'Other' ? cancelCustomReason.trim() : cancelReason;
+    if (!finalReason) {
+      alert('Please specify a cancellation reason.');
+      return;
+    }
+
+    setCancelling(true);
+    try {
+      const orderId = cancellingOrder.id;
+      const { data, error } = await supabase.rpc('staff_cancel_order', {
+        p_order_id: orderId,
+        p_reason: finalReason,
+      });
+
+      if (error) {
+        alert(error.message || 'Failed to cancel order.');
+        return;
+      }
+
+      // Immediately remove from queue and refresh
+      setOrders((prev) => prev.filter((o) => o?.id !== orderId));
+      setCancellingOrder(null);
+      showBartenderToast(`Order #${String(orderId).slice(0, 6)} cancelled`);
+      await loadOrders();
+    } catch (err) {
+      alert(err.message || 'Error cancelling order');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   useEffect(() => {
     shiftStartedRef.current = shiftStarted;
   }, [shiftStarted]);
@@ -512,8 +693,23 @@ function BartenderDashboardInner() {
           { event: '*', schema: 'public', table: 'orders', filter: `cafe_id=eq.${cafeId}` },
           (payload) => {
             if (!isMountedRef.current) return;
+            const newRow = payload?.new;
+            const oldRow = payload?.old;
+
+            if (newRow && oldRow) {
+              if (newRow.edited_at && newRow.edited_at !== oldRow.edited_at) {
+                if (newRow.edited_by === 'customer') {
+                  showBartenderToast(`Table ${newRow.table_name || ''} changed their order`);
+                  setHighlightedOrderId(newRow.id);
+                  setTimeout(() => setHighlightedOrderId((cur) => (cur === newRow.id ? null : cur)), 4000);
+                }
+              }
+              if (newRow.status === 'cancelled' && oldRow.status !== 'cancelled') {
+                showBartenderToast(`Table ${newRow.table_name || ''} cancelled their order`);
+              }
+            }
+
             loadOrders();
-            // Queue updates automatically update newCount which drives continuous useOrderAlarm
           }
         )
         .on(
@@ -847,11 +1043,48 @@ function BartenderDashboardInner() {
             box-shadow: 0 0 22px 6px rgba(196, 85, 61, 0.6), 0 14px 35px rgba(196, 85, 61, 0.45);
           }
         }
+        @keyframes highlightEditedOrder {
+          0%, 100% {
+            border-color: #E3A32B;
+            box-shadow: 0 0 25px 6px rgba(227, 163, 43, 0.7);
+          }
+          50% {
+            border-color: #FFFDF9;
+            box-shadow: 0 0 35px 10px rgba(255, 253, 249, 0.85);
+          }
+        }
         @keyframes pulseNotice {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.88; }
         }
       `}</style>
+
+      {/* ─── FLOATING BARTENDER TOAST ────────────────────────────────────────── */}
+      {toast && (
+        <div
+          className="anim-fade-in"
+          style={{
+            position: 'fixed',
+            top: 76,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1000,
+            backgroundColor: '#C98A4B',
+            color: '#1A120C',
+            padding: '10px 22px',
+            borderRadius: 999,
+            fontWeight: 800,
+            fontSize: 14,
+            boxShadow: '0 8px 30px rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <Sparkles size={16} />
+          <span>{toast}</span>
+        </div>
+      )}
 
       {/* ─── STICKY TOP BAR ─────────────────────────────────────────────────── */}
       <header
@@ -1095,14 +1328,364 @@ function BartenderDashboardInner() {
                   now={now}
                   mounted={mounted}
                   isBusy={updatingId === order.id}
+                  isHighlighted={highlightedOrderId === order.id}
                   onStationTransition={handleStationTransition}
                   onOrderStatusTransition={handleOrderStatusTransition}
+                  onEdit={handleOpenStaffEdit}
+                  onCancel={handleOpenStaffCancel}
                 />
               </OrderCardErrorBoundary>
             ))}
           </div>
         )}
       </main>
+
+      {/* ─── STAFF EDIT ORDER MODAL ─────────────────────────────────────────── */}
+      {editingOrder && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            backdropFilter: 'blur(5px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20,
+          }}
+        >
+          <div
+            className="card anim-fade-in"
+            style={{
+              maxWidth: 520,
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              backgroundColor: '#251A12',
+              border: '1px solid #3B2A1E',
+              borderRadius: 'var(--radius-card)',
+              padding: 24,
+              color: '#FFFDF9',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 16,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: '#FFFDF9' }}>
+                  Edit Order #{String(editingOrder.id).slice(0, 6)}
+                </h3>
+                <div style={{ fontSize: 13, color: 'var(--color-muted)', marginTop: 2 }}>
+                  {editingOrder.table_name || 'Table'}
+                </div>
+              </div>
+              <IconButton icon={<X size={18} />} onClick={() => setEditingOrder(null)} variant="ghost" />
+            </div>
+
+            {/* Current lines with quantity steppers */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-muted)', textTransform: 'uppercase' }}>
+                Order Items
+              </span>
+              {editItems.map((line, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    backgroundColor: '#1A120C',
+                    border: '1px solid #3B2A1E',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: 12,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>
+                      {formatItemName(line.name, 'en')}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => handleStaffEditItemQty(idx, -1)}
+                        style={{
+                          width: 32,
+                          height: 32,
+                          borderRadius: '50%',
+                          backgroundColor: '#251A12',
+                          border: '1px solid #3B2A1E',
+                          color: '#FFF',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        {line.qty === 1 ? <Trash2 size={14} color="var(--color-terracotta)" /> : <Minus size={14} />}
+                      </button>
+                      <span style={{ fontSize: 16, fontWeight: 800, minWidth: 20, textAlign: 'center' }}>
+                        {line.qty}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleStaffEditItemQty(idx, 1)}
+                        style={{
+                          width: 32,
+                          height: 32,
+                          borderRadius: '50%',
+                          backgroundColor: '#251A12',
+                          border: '1px solid #3B2A1E',
+                          color: '#FFF',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <input
+                    type="text"
+                    value={line.note || ''}
+                    onChange={(e) => handleStaffEditItemNote(idx, e.target.value)}
+                    placeholder="Item note (e.g. oat milk, less ice)..."
+                    style={{
+                      backgroundColor: '#251A12',
+                      border: '1px solid #3B2A1E',
+                      borderRadius: 6,
+                      padding: '6px 10px',
+                      color: '#FFF',
+                      fontSize: 12,
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* Add Item Search over cafe items (including unavailable) */}
+            <div style={{ borderTop: '1px solid #3B2A1E', paddingTop: 12 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--color-muted)', marginBottom: 6, textTransform: 'uppercase' }}>
+                Add Item from Menu
+              </label>
+              <div style={{ position: 'relative', marginBottom: 8 }}>
+                <Search size={16} style={{ position: 'absolute', left: 10, top: 10, color: 'var(--color-muted)' }} />
+                <input
+                  type="text"
+                  value={addItemSearch}
+                  onChange={(e) => setAddItemSearch(e.target.value)}
+                  placeholder="Search cafe items..."
+                  style={{
+                    width: '100%',
+                    backgroundColor: '#1A120C',
+                    border: '1px solid #3B2A1E',
+                    borderRadius: 6,
+                    padding: '8px 12px 8px 34px',
+                    color: '#FFF',
+                    fontSize: 13,
+                  }}
+                />
+              </div>
+
+              {addItemSearch.trim() && (
+                <div style={{ maxHeight: 150, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {cafeItems
+                    .filter((ci) => {
+                      const name = formatItemName(ci.name, 'en').toLowerCase();
+                      return name.includes(addItemSearch.toLowerCase().trim());
+                    })
+                    .slice(0, 8)
+                    .map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => {
+                          handleStaffAddItem(item);
+                          setAddItemSearch('');
+                        }}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '8px 12px',
+                          backgroundColor: '#1A120C',
+                          border: '1px solid #3B2A1E',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>{formatItemName(item.name, 'en')}</span>
+                          {item.available === false && (
+                            <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--color-terracotta)', backgroundColor: 'rgba(196,85,61,0.2)', padding: '2px 6px', borderRadius: 4 }}>
+                              Unavailable
+                            </span>
+                          )}
+                        </div>
+                        <Plus size={14} color="var(--color-caramel)" />
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+
+            {/* Whole order note */}
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--color-muted)', marginBottom: 4, textTransform: 'uppercase' }}>
+                Order Instructions
+              </label>
+              <textarea
+                rows={2}
+                value={editNote}
+                onChange={(e) => setEditNote(e.target.value)}
+                placeholder="Special instructions..."
+                style={{
+                  width: '100%',
+                  backgroundColor: '#1A120C',
+                  border: '1px solid #3B2A1E',
+                  borderRadius: 6,
+                  padding: '8px 10px',
+                  color: '#FFF',
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
+              <Button variant="secondary" size="md" fullWidth onClick={() => setEditingOrder(null)} disabled={savingEdit}>
+                Cancel
+              </Button>
+              <Button variant="accent" size="md" fullWidth onClick={handleSaveStaffEdit} disabled={savingEdit}>
+                {savingEdit ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── STAFF CANCEL ORDER MODAL ───────────────────────────────────────── */}
+      {cancellingOrder && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            backdropFilter: 'blur(5px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20,
+          }}
+        >
+          <div
+            className="card anim-fade-in"
+            style={{
+              maxWidth: 440,
+              width: '100%',
+              backgroundColor: '#251A12',
+              border: '1px solid #3B2A1E',
+              borderRadius: 'var(--radius-card)',
+              padding: 28,
+              color: '#FFFDF9',
+              textAlign: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: '50%',
+                backgroundColor: 'rgba(196, 85, 61, 0.15)',
+                color: 'var(--color-terracotta)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 16px',
+              }}
+            >
+              <AlertCircle size={28} />
+            </div>
+
+            <h3 style={{ fontSize: 20, fontWeight: 800, margin: '0 0 6px', color: '#FFFDF9' }}>
+              Cancel Order #{String(cancellingOrder.id).slice(0, 6)}?
+            </h3>
+            <p style={{ fontSize: 13, color: 'var(--color-muted)', marginBottom: 20 }}>
+              {cancellingOrder.table_name || 'Table'} will see this cancellation and reason.
+            </p>
+
+            {/* Reason Chips */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18, textAlign: 'left' }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-muted)', textTransform: 'uppercase' }}>
+                Select Cancellation Reason:
+              </label>
+              {[
+                'Customer changed their mind',
+                'Out of stock',
+                'Mistake',
+                'Other',
+              ].map((reason) => (
+                <button
+                  key={reason}
+                  type="button"
+                  onClick={() => setCancelReason(reason)}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: cancelReason === reason ? '2px solid var(--color-caramel)' : '1px solid #3B2A1E',
+                    backgroundColor: cancelReason === reason ? 'rgba(201, 138, 75, 0.15)' : '#1A120C',
+                    color: cancelReason === reason ? 'var(--color-caramel)' : '#FFFDF9',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {reason}
+                </button>
+              ))}
+
+              {cancelReason === 'Other' && (
+                <input
+                  type="text"
+                  value={cancelCustomReason}
+                  onChange={(e) => setCancelCustomReason(e.target.value)}
+                  placeholder="Type cancellation reason..."
+                  style={{
+                    backgroundColor: '#1A120C',
+                    border: '1px solid #3B2A1E',
+                    borderRadius: 6,
+                    padding: '8px 12px',
+                    color: '#FFF',
+                    fontSize: 13,
+                    marginTop: 4,
+                  }}
+                />
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Button variant="secondary" size="md" fullWidth onClick={() => setCancellingOrder(null)} disabled={cancelling}>
+                Back
+              </Button>
+              <Button
+                variant="danger"
+                size="md"
+                fullWidth
+                style={{ backgroundColor: 'var(--color-terracotta)', color: '#FFF' }}
+                onClick={handleConfirmStaffCancel}
+                disabled={cancelling}
+              >
+                {cancelling ? 'Cancelling...' : 'Confirm Cancel'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1114,9 +1697,13 @@ function OrderCard({
   now,
   mounted,
   isBusy,
+  isHighlighted,
   onStationTransition,
   onOrderStatusTransition,
+  onEdit,
+  onCancel,
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const stationRecord = Array.isArray(order?.order_stations) ? order.order_stations[0] : null;
   const stationStatus = stationRecord?.status || (order?.status === 'open' ? 'new' : 'ready');
   const orderStatus = order?.status || 'open';
@@ -1158,54 +1745,177 @@ function OrderCard({
       className={`card ${isNew ? 'order-card-pulse' : ''}`}
       style={{
         backgroundColor: '#251A12',
-        border: isNew ? '2px solid var(--color-caramel)' : '1px solid #3B2A1E',
+        border: isHighlighted
+          ? '2.5px solid var(--color-amber)'
+          : isNew
+          ? '2px solid var(--color-caramel)'
+          : '1px solid #3B2A1E',
         borderRadius: 'var(--radius-card)',
         padding: 24,
         display: 'flex',
         flexDirection: 'column',
         gap: 18,
-        boxShadow: isNew ? '0 10px 30px rgba(201, 138, 75, 0.35)' : 'var(--shadow)',
-        animation: isNew ? 'pulseOrderCard 1.5s ease-in-out infinite' : 'none',
+        boxShadow: isHighlighted
+          ? '0 0 30px rgba(227, 163, 43, 0.7)'
+          : isNew
+          ? '0 10px 30px rgba(201, 138, 75, 0.35)'
+          : 'var(--shadow)',
+        animation: isHighlighted
+          ? 'highlightEditedOrder 1s ease-in-out infinite'
+          : isNew
+          ? 'pulseOrderCard 1.5s ease-in-out infinite'
+          : 'none',
         transition: 'border 0.3s ease, box-shadow 0.3s ease',
+        position: 'relative',
       }}
     >
-      {/* Card Header: Table Name & Timer Chip */}
+      {/* Card Header: Table Name, Timer Chip & Action Menu */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div>
-          <h2
-            style={{
-              fontSize: 32,
-              fontWeight: 800,
-              color: '#FFFDF9',
-              letterSpacing: '-0.02em',
-              margin: 0,
-            }}
-          >
-            {tableName}
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <h2
+              style={{
+                fontSize: 32,
+                fontWeight: 800,
+                color: '#FFFDF9',
+                letterSpacing: '-0.02em',
+                margin: 0,
+              }}
+            >
+              {tableName}
+            </h2>
+            {order.edited_at && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '3px 8px',
+                  borderRadius: 4,
+                  backgroundColor: 'rgba(227, 163, 43, 0.2)',
+                  color: 'var(--color-amber)',
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: '0.03em',
+                  border: '1px solid rgba(227, 163, 43, 0.4)',
+                }}
+              >
+                EDITED ({order.edited_by === 'customer' ? 'by customer' : 'by staff'})
+              </span>
+            )}
+          </div>
           <div style={{ fontSize: 12, color: 'var(--color-muted)', marginTop: 2 }}>
             Order #{shortOrderId}
           </div>
         </div>
 
-        {/* Timer Chip */}
-        <div
-          style={{
-            padding: '6px 14px',
-            borderRadius: 999,
-            backgroundColor: timerBg,
-            color: timerColor,
-            border: `1.5px solid ${timerBorder}`,
-            fontWeight: 700,
-            fontSize: 13,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <Clock size={15} />
-          <span>{elapsedMinutes} min ago</span>
+        {/* Timer Chip & 3-Dots Action Menu */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+          <div
+            style={{
+              padding: '6px 14px',
+              borderRadius: 999,
+              backgroundColor: timerBg,
+              color: timerColor,
+              border: `1.5px solid ${timerBorder}`,
+              fontWeight: 700,
+              fontSize: 13,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Clock size={15} />
+            <span>{elapsedMinutes} min ago</span>
+          </div>
+
+          {/* Action Menu button */}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setMenuOpen(!menuOpen)}
+              style={{
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 8,
+                padding: '6px 8px',
+                color: '#FFFDF9',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              title="Order actions"
+            >
+              <MoreVertical size={16} />
+            </button>
+
+            {menuOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '115%',
+                  right: 0,
+                  zIndex: 30,
+                  backgroundColor: '#1A120C',
+                  border: '1px solid #3B2A1E',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: 6,
+                  boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  minWidth: 145,
+                }}
+              >
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (onEdit) onEdit(order);
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#FFFDF9',
+                    padding: '8px 12px',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    borderRadius: 4,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <Edit2 size={14} color="var(--color-amber)" />
+                  <span>Edit order</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (onCancel) onCancel(order);
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--color-terracotta)',
+                    padding: '8px 12px',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    borderRadius: 4,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <XCircle size={14} />
+                  <span>Cancel order</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

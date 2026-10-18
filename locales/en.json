@@ -77,7 +77,21 @@
     "too_many_orders": "You ordered a few times just now. Please wait a moment.",
     "item_unavailable": "An item is no longer available. Please check your order.",
     "open_hours": "Opening Hours",
-    "welcome": "Welcome!"
+    "welcome": "Welcome!",
+    "order_paid_thank_you": "Paid. Thank you!",
+    "edit_order": "Edit order",
+    "cancel_order": "Cancel order",
+    "cancel_order_confirm": "Cancel this order?",
+    "bar_started_notice": "The bar has started your order. Please ask the staff to change it.",
+    "updated_by_staff": "Updated by staff",
+    "updated_by_you": "Updated",
+    "cancelled_by_staff": "Cancelled by staff",
+    "cancelled_by_you": "Cancelled",
+    "order_updated_toast": "Order updated",
+    "order_cancelled_toast": "Order cancelled",
+    "add_more_items": "Add more items",
+    "save_changes": "Save changes",
+    "closing_soon": "Closing soon"
   },
   "admin": {
     "tabs": {
