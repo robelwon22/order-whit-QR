@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useEffect, useState, useRef, useCallback, Component } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo, Component } from 'react';
 import { supabase } from '../../lib/supabase';
+import * as alarm from '../../lib/alarm';
+import { useOrderAlarm } from '../../lib/useOrderAlarm';
 import { CoffeeIllustration, Logo } from '../../components/ui/Logo';
 import { Button, IconButton } from '../../components/ui/Button';
 import { Badge, EmptyState } from '../../components/ui/Badge';
@@ -186,69 +188,6 @@ function formatText(val, fallback = '') {
   return String(val);
 }
 
-// ─── WEB AUDIO CHIME PLAYER ────────────────────────────────────────────────
-class ChimePlayer {
-  constructor() {
-    this.ctx = null;
-  }
-
-  init() {
-    if (typeof window === 'undefined') return;
-    try {
-      if (!this.ctx) {
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (AudioCtx) {
-          this.ctx = new AudioCtx();
-        }
-      }
-      if (this.ctx && this.ctx.state === 'suspended') {
-        this.ctx.resume().catch(() => {});
-      }
-    } catch (e) {
-      console.warn('AudioContext initialization notice:', e);
-    }
-  }
-
-  playOrderBell(volume = 0.8) {
-    if (typeof window === 'undefined') return;
-    try {
-      this.init();
-      if (!this.ctx) return;
-
-      const now = this.ctx.currentTime;
-      const osc1 = this.ctx.createOscillator();
-      const osc2 = this.ctx.createOscillator();
-      const gainNode = this.ctx.createGain();
-
-      osc1.type = 'sine';
-      osc1.frequency.setValueAtTime(1396.91, now); // F6
-      osc1.frequency.exponentialRampToValueAtTime(1318.51, now + 0.6);
-
-      osc2.type = 'triangle';
-      osc2.frequency.setValueAtTime(1760.0, now + 0.08); // A6
-      osc2.frequency.exponentialRampToValueAtTime(1661.22, now + 0.9);
-
-      const targetVol = Math.max(0, Math.min(1, Number(volume) || 0.8));
-      gainNode.gain.setValueAtTime(0, now);
-      gainNode.gain.linearRampToValueAtTime(targetVol * 0.45, now + 0.04);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
-
-      osc1.connect(gainNode);
-      osc2.connect(gainNode);
-      gainNode.connect(this.ctx.destination);
-
-      osc1.start(now);
-      osc2.start(now + 0.08);
-      osc1.stop(now + 1.2);
-      osc2.stop(now + 1.2);
-    } catch (e) {
-      console.warn('Audio chime playback notice:', e);
-    }
-  }
-}
-
-const chimeInstance = new ChimePlayer();
-
 // ─── MAIN BARTENDER COMPONENT ──────────────────────────────────────────────
 function BartenderDashboardInner() {
   const [mounted, setMounted] = useState(false);
@@ -258,10 +197,30 @@ function BartenderDashboardInner() {
   const [err, setErr] = useState('');
   const [errType, setErrType] = useState('access'); // 'access', 'disabled', 'unavailable', 'config'
 
-  // Shift & Audio State
+  // Shift & Audio State (Persisted in localStorage)
   const [shiftStarted, setShiftStarted] = useState(false);
-  const [volume, setVolume] = useState(0.8);
-  const [isMuted, setIsMuted] = useState(false);
+  const [audioReady, setAudioReady] = useState(false);
+  const [volume, setVolume] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('bartender_volume');
+        if (saved !== null) {
+          const parsed = Number(saved);
+          if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) return parsed;
+        }
+      } catch {}
+    }
+    return 0.8;
+  });
+  const [isMuted, setIsMuted] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('bartender_muted');
+        if (saved !== null) return saved === 'true';
+      } catch {}
+    }
+    return false;
+  });
 
   // Orders State
   const [orders, setOrders] = useState([]);
@@ -278,6 +237,58 @@ function BartenderDashboardInner() {
   const shiftStartedRef = useRef(false);
   const isMutedRef = useRef(false);
   const volumeRef = useRef(0.8);
+
+  // Synchronously compute newCount from the live queue
+  const myStation = me?.station || 'bar';
+  const newCount = orders.reduce((count, order) => {
+    if (order?.status !== 'open') return count;
+    const stations = Array.isArray(order?.order_stations) ? order.order_stations : [];
+    if (stations.length === 0) {
+      return count + 1;
+    }
+    const stationNewCount = stations.filter(
+      (st) => (!me?.station || st?.station === myStation || st?.station === 'bar') && st?.status === 'new'
+    ).length;
+    return count + stationNewCount;
+  }, 0);
+
+  // Settings combining cafe alert settings with bartender local volume/mute
+  const cafeAlert = cafe?.settings?.alert || {};
+  const effectiveVolume = isMuted ? 0 : volume;
+
+  const alertSettings = useMemo(() => ({
+    sound: cafeAlert.sound || 'Classic bell',
+    customUrl: cafeAlert.customUrl || null,
+    pause: typeof cafeAlert.pause === 'number' ? cafeAlert.pause : 1,
+    volume: effectiveVolume * (cafeAlert.volume ?? 1),
+    muted: isMuted || effectiveVolume === 0,
+  }), [cafeAlert.sound, cafeAlert.customUrl, cafeAlert.pause, cafeAlert.volume, effectiveVolume, isMuted]);
+
+  // Dedicated continuous order alarm hook called at top level
+  useOrderAlarm(newCount, alertSettings, shiftStarted);
+
+  // Local storage setters
+  const handleVolumeChange = (newVol) => {
+    const v = Math.max(0, Math.min(1, Number(newVol) || 0));
+    setVolume(v);
+    if (isMuted && v > 0) {
+      setIsMuted(false);
+      try {
+        localStorage.setItem('bartender_muted', 'false');
+      } catch {}
+    }
+    try {
+      localStorage.setItem('bartender_volume', String(v));
+    } catch {}
+  };
+
+  const handleToggleMute = () => {
+    const next = !isMuted;
+    setIsMuted(next);
+    try {
+      localStorage.setItem('bartender_muted', String(next));
+    } catch {}
+  };
 
   useEffect(() => {
     shiftStartedRef.current = shiftStarted;
@@ -502,16 +513,7 @@ function BartenderDashboardInner() {
           (payload) => {
             if (!isMountedRef.current) return;
             loadOrders();
-            if (payload?.eventType === 'INSERT') {
-              if (shiftStartedRef.current && !isMutedRef.current) {
-                chimeInstance.playOrderBell(volumeRef.current);
-                if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-                  try {
-                    navigator.vibrate([200, 100, 200]);
-                  } catch (e) {}
-                }
-              }
-            }
+            // Queue updates automatically update newCount which drives continuous useOrderAlarm
           }
         )
         .on(
@@ -536,12 +538,13 @@ function BartenderDashboardInner() {
 
   // Handle Start Shift click
   const handleStartShift = async () => {
+    let ok = false;
     try {
-      chimeInstance.init();
-      chimeInstance.playOrderBell(volume);
+      ok = await alarm.unlock();
     } catch (e) {
-      console.warn('Audio chime on start shift notice:', e);
+      console.warn('Audio alarm.unlock on start shift error:', e);
     }
+    setAudioReady(ok || alarm.isRunning());
     requestWakeLock();
     setShiftStarted(true);
   };
@@ -549,8 +552,7 @@ function BartenderDashboardInner() {
   // Sound test button
   const handleTestSound = () => {
     try {
-      chimeInstance.init();
-      chimeInstance.playOrderBell(volume);
+      alarm.preview(alertSettings);
     } catch (e) {
       console.warn('Audio test sound notice:', e);
     }
@@ -834,6 +836,23 @@ function BartenderDashboardInner() {
         flexDirection: 'column',
       }}
     >
+      <style>{`
+        @keyframes pulseOrderCard {
+          0%, 100% {
+            border-color: #E3A32B;
+            box-shadow: 0 0 0 0 rgba(227, 163, 43, 0.4), 0 10px 30px rgba(201, 138, 75, 0.25);
+          }
+          50% {
+            border-color: #C4553D;
+            box-shadow: 0 0 22px 6px rgba(196, 85, 61, 0.6), 0 14px 35px rgba(196, 85, 61, 0.45);
+          }
+        }
+        @keyframes pulseNotice {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.88; }
+        }
+      `}</style>
+
       {/* ─── STICKY TOP BAR ─────────────────────────────────────────────────── */}
       <header
         style={{
@@ -941,10 +960,10 @@ function BartenderDashboardInner() {
             </button>
           </div>
 
-          {/* Volume & Audio Controls */}
+          {/* Volume & Audio Controls (Device volume persisted to localStorage) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button
-              onClick={() => setIsMuted(!isMuted)}
+              onClick={handleToggleMute}
               style={{
                 background: 'transparent',
                 border: 'none',
@@ -952,6 +971,7 @@ function BartenderDashboardInner() {
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
+                padding: 4,
               }}
               title={isMuted ? 'Unmute' : 'Mute'}
             >
@@ -964,12 +984,9 @@ function BartenderDashboardInner() {
               max="1"
               step="0.05"
               value={isMuted ? 0 : volume}
-              onChange={(e) => {
-                setVolume(Number(e.target.value));
-                if (isMuted) setIsMuted(false);
-              }}
+              onChange={(e) => handleVolumeChange(Number(e.target.value))}
               style={{ width: 75, cursor: 'pointer', accentColor: 'var(--color-caramel)' }}
-              title="Alert Volume"
+              title={`Alert Volume: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
             />
 
             <Button size="sm" variant="secondary" onClick={handleTestSound} icon={<Bell size={13} />}>
@@ -980,6 +997,72 @@ function BartenderDashboardInner() {
           <IconButton icon={<LogOut size={16} />} onClick={handleLogout} title="Log out" variant="ghost" />
         </div>
       </header>
+
+      {/* ─── VISUAL AUDIO NOTICES ────────────────────────────────────────────── */}
+      {shiftStarted && !audioReady && (
+        <div
+          onClick={async () => {
+            const ok = await alarm.unlock();
+            setAudioReady(ok || alarm.isRunning());
+          }}
+          style={{
+            backgroundColor: 'var(--color-terracotta)',
+            color: '#FFFDF9',
+            padding: '12px 20px',
+            textAlign: 'center',
+            fontWeight: 700,
+            fontSize: 14,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+            boxShadow: '0 4px 14px rgba(196, 85, 61, 0.4)',
+            userSelect: 'none',
+          }}
+        >
+          <VolumeX size={18} />
+          <span>Tap to enable sound (Browser requires user interaction for continuous order alerts)</span>
+        </div>
+      )}
+
+      {shiftStarted && newCount > 0 && isMuted && (
+        <div
+          style={{
+            backgroundColor: '#9A2C14',
+            color: '#FFFDF9',
+            padding: '12px 20px',
+            textAlign: 'center',
+            fontWeight: 800,
+            fontSize: 15,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 12,
+            borderBottom: '2px solid rgba(0,0,0,0.3)',
+            boxShadow: '0 6px 18px rgba(154, 44, 20, 0.4)',
+            animation: 'pulseNotice 2s infinite',
+          }}
+        >
+          <AlertCircle size={20} />
+          <span>Sound is muted — {newCount} new {newCount === 1 ? 'order' : 'orders'} waiting!</span>
+          <button
+            onClick={handleToggleMute}
+            style={{
+              backgroundColor: '#FFFDF9',
+              color: '#9A2C14',
+              border: 'none',
+              borderRadius: 999,
+              padding: '4px 14px',
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: 'pointer',
+            }}
+          >
+            Unmute
+          </button>
+        </div>
+      )}
 
       {/* ─── ORDERS QUEUE ───────────────────────────────────────────────────── */}
       <main style={{ flex: 1, padding: '24px 20px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
@@ -1072,7 +1155,7 @@ function OrderCard({
 
   return (
     <div
-      className="card"
+      className={`card ${isNew ? 'order-card-pulse' : ''}`}
       style={{
         backgroundColor: '#251A12',
         border: isNew ? '2px solid var(--color-caramel)' : '1px solid #3B2A1E',
@@ -1081,7 +1164,9 @@ function OrderCard({
         display: 'flex',
         flexDirection: 'column',
         gap: 18,
-        boxShadow: isNew ? '0 10px 30px rgba(201, 138, 75, 0.25)' : 'var(--shadow)',
+        boxShadow: isNew ? '0 10px 30px rgba(201, 138, 75, 0.35)' : 'var(--shadow)',
+        animation: isNew ? 'pulseOrderCard 1.5s ease-in-out infinite' : 'none',
+        transition: 'border 0.3s ease, box-shadow 0.3s ease',
       }}
     >
       {/* Card Header: Table Name & Timer Chip */}

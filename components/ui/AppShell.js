@@ -56,6 +56,7 @@ export function AppShell({
     { label: t('admin.tabs.design') || 'Design', href: '/admin/design', icon: Palette },
     { label: t('admin.tabs.tables') || 'Tables & QR', href: '/admin/tables', icon: QrCode },
     { label: t('admin.tabs.staff') || 'Staff', href: '/admin/staff', icon: Users },
+    { label: t('admin.tabs.settings') || 'Settings', href: '/admin/settings', icon: Settings },
   ];
 
   // If super admin, add Super Admin shortcut
