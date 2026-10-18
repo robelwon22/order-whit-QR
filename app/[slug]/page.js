@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { supabase, pick } from '../../lib/supabase';
 import { useI18n } from '../../lib/i18n';
@@ -26,7 +26,150 @@ import {
   Info,
   X,
   Volume2,
+  ClipboardList,
+  WifiOff,
+  RotateCw,
 } from 'lucide-react';
+
+export function getOrderStep(order) {
+  if (!order) return 1;
+  const status = (order.status || '').toLowerCase();
+  if (status === 'cancelled') return -1;
+  if (status === 'served' || status === 'paid') return 4;
+
+  const stations = order.stations || [];
+  if (stations.length > 0) {
+    const hasReady = stations.some((s) => s.status === 'ready');
+    const hasPreparing = stations.some((s) => s.status === 'preparing' || s.status === 'accepted');
+    const hasNew = stations.some((s) => s.status === 'new');
+
+    if (hasReady && !hasPreparing && !hasNew) return 3;
+    if (hasReady || hasPreparing) return 2;
+    if (hasNew) return 1;
+  }
+
+  if (status === 'ready') return 3;
+  if (status === 'preparing') return 2;
+  return 1;
+}
+
+function OrderStepper({ step, isAmharic, t }) {
+  if (step === -1) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 12px',
+          borderRadius: 8,
+          backgroundColor: 'rgba(229, 62, 62, 0.1)',
+          color: '#E53E3E',
+          fontSize: 12,
+          fontWeight: 600,
+          marginTop: 10,
+        }}
+      >
+        <AlertCircle size={15} style={{ flexShrink: 0 }} />
+        <span>
+          {t('menu.order_cancelled') ||
+            (isAmharic ? 'ተሰርዟል፣ እባክዎ ሰራተኞችን ይጠይቁ' : 'Cancelled, please ask the staff')}
+        </span>
+      </div>
+    );
+  }
+
+  const steps = [
+    { key: 1, label: t('menu.order_received') || (isAmharic ? 'ደርሷል' : 'Received') },
+    { key: 2, label: t('menu.order_preparing') || (isAmharic ? 'በመዘጋጀት ላይ' : 'Being prepared') },
+    { key: 3, label: t('menu.order_ready') || (isAmharic ? 'ዝግጁ ሆኗል' : 'Ready') },
+    { key: 4, label: t('menu.order_served') || (isAmharic ? 'ቀርቧል' : 'Served') },
+  ];
+
+  return (
+    <div style={{ marginTop: 12, marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+        {steps.map((s, idx) => {
+          const isDone = step > s.key;
+          const isCurrent = step === s.key;
+
+          return (
+            <React.Fragment key={s.key}>
+              {idx > 0 && (
+                <div
+                  style={{
+                    flex: 1,
+                    height: 3,
+                    backgroundColor: step >= s.key ? 'var(--color-sage)' : 'var(--color-line)',
+                    transition: 'background-color 0.4s ease',
+                  }}
+                />
+              )}
+              <div
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  flexShrink: 0,
+                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                  backgroundColor:
+                    isDone || isCurrent ? 'var(--color-sage)' : 'var(--color-line)',
+                  color: isDone || isCurrent ? '#FFF' : 'var(--color-muted)',
+                  boxShadow:
+                    isCurrent
+                      ? '0 0 0 3px rgba(107, 143, 113, 0.25)'
+                      : 'none',
+                  transform: isCurrent ? 'scale(1.08)' : 'scale(1)',
+                }}
+              >
+                {isDone ? <Check size={13} strokeWidth={3} /> : s.key}
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          textAlign: 'center',
+          marginTop: 6,
+          gap: 2,
+        }}
+      >
+        {steps.map((s) => {
+          const isCurrent = step === s.key;
+          const isDone = step > s.key;
+          return (
+            <div
+              key={s.key}
+              style={{
+                fontSize: 10.5,
+                fontWeight: isCurrent ? 700 : isDone ? 600 : 500,
+                color:
+                  isCurrent
+                    ? 'var(--color-sage)'
+                    : isDone
+                    ? 'var(--color-espresso)'
+                    : 'var(--color-muted)',
+                lineHeight: 1.2,
+                transition: 'color 0.3s ease',
+              }}
+            >
+              {s.label}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export default function CustomerMenuPage() {
   const { slug } = useParams();
@@ -58,21 +201,135 @@ export default function CustomerMenuPage() {
   const [cartOpen, setCartOpen] = useState(false);
   const [orderNote, setOrderNote] = useState('');
   const [submittingOrder, setSubmittingOrder] = useState(false);
-  const [activeOrder, setActiveOrder] = useState(null); // { id, table_name, status }
+  const [activeOrder, setActiveOrder] = useState(null);
   const [orderSuccessModal, setOrderSuccessModal] = useState(false);
+
+  // My Orders & Live Status State
+  const [myOrdersOpen, setMyOrdersOpen] = useState(false);
+  const [tableOrders, setTableOrders] = useState([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [ordersError, setOrdersError] = useState(false);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [toastMessage, setToastMessage] = useState(null);
+
+  const prevOrderStepsRef = useRef({});
+  const toastTimerRef = useRef(null);
+
+  const showToast = useCallback((msg) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToastMessage(msg);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 5000);
+  }, []);
 
   // Read URL table token
   const urlToken = searchParams.get('t') || searchParams.get('table');
 
-  // Load Cafe, Categories, Items, and Table Token
+  // Fetch and sync table orders
+  const fetchTableOrders = useCallback(async (explicitToken = null) => {
+    const token =
+      explicitToken ||
+      table?.token ||
+      (typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null);
+
+    if (!token) return;
+
+    try {
+      const { data: ordersData, error } = await supabase.rpc('get_table_orders', {
+        p_token: token,
+        p_hours: 6,
+      });
+
+      if (error) {
+        console.warn('get_table_orders error:', error);
+        setOrdersError(true);
+        return;
+      }
+
+      setOrdersError(false);
+
+      if (ordersData) {
+        // Read any cached local orders
+        let localCached = [];
+        try {
+          const raw = localStorage.getItem(`table_orders_${slug}_${token}`);
+          if (raw) localCached = JSON.parse(raw);
+        } catch {}
+
+        // Merge: keep local orders that might not yet be returned by DB
+        const dbIds = new Set(ordersData.map((o) => o.id));
+        const localOnly = Array.isArray(localCached) ? localCached.filter((o) => !dbIds.has(o.id)) : [];
+        const merged = [...localOnly, ...ordersData];
+
+        // Check for transition to ready
+        merged.forEach((order) => {
+          const currentStep = getOrderStep(order);
+          const prevStep = prevOrderStepsRef.current[order.id];
+          if (prevStep !== undefined && prevStep < 3 && currentStep === 3) {
+            showToast(t('menu.order_ready_toast') || (isAmharic ? 'ትዕዛዝዎ ዝግጁ ነው! ሊወስዱት ይችላሉ።' : 'Your order is Ready! Please collect it.'));
+          }
+          prevOrderStepsRef.current[order.id] = currentStep;
+        });
+
+        setTableOrders(merged);
+
+        try {
+          localStorage.setItem(`table_orders_${slug}_${token}`, JSON.stringify(merged));
+          localStorage.setItem(`table_order_ids_${slug}_${token}`, JSON.stringify(merged.map((o) => o.id)));
+        } catch {}
+      }
+    } catch (err) {
+      console.warn('fetchTableOrders exception:', err);
+      setOrdersError(true);
+    }
+  }, [table?.token, slug, showToast, t, isAmharic]);
+
+  // Load menu data (cafe, categories, items)
+  const loadMenuData = useCallback(async () => {
+    try {
+      const { data: c, error: cafeErr } = await supabase
+        .from('cafes')
+        .select('*')
+        .eq('slug', slug)
+        .maybeSingle();
+
+      if (cafeErr || !c) return;
+
+      setCafe(c);
+
+      const [catRes, itemRes] = await Promise.all([
+        supabase
+          .from('categories')
+          .select('*')
+          .eq('cafe_id', c.id)
+          .eq('visible', true)
+          .order('sort_order')
+          .order('created_at'),
+        supabase
+          .from('items')
+          .select('*')
+          .eq('cafe_id', c.id)
+          .eq('available', true)
+          .order('sort_order')
+          .order('created_at'),
+      ]);
+
+      setCats(catRes.data || []);
+      setItems(itemRes.data || []);
+    } catch (err) {
+      console.warn('loadMenuData background refresh error:', err);
+    }
+  }, [slug]);
+
+  // Initial load and Realtime setup
   useEffect(() => {
     let isMounted = true;
 
-    async function loadData() {
+    async function init() {
       try {
         setLoading(true);
 
-        // 1. Fetch Cafe by slug
         const { data: c, error: cafeErr } = await supabase
           .from('cafes')
           .select('*')
@@ -94,7 +351,6 @@ export default function CustomerMenuPage() {
           }
         }
 
-        // 2. Fetch categories and items
         const [catRes, itemRes] = await Promise.all([
           supabase.from('categories').select('*').eq('cafe_id', c.id).eq('visible', true).order('sort_order').order('created_at'),
           supabase.from('items').select('*').eq('cafe_id', c.id).eq('available', true).order('sort_order').order('created_at'),
@@ -105,7 +361,7 @@ export default function CustomerMenuPage() {
           setItems(itemRes.data || []);
         }
 
-        // 3. Resolve Table Token
+        // Resolve Table Token
         let activeToken = urlToken;
         if (!activeToken && typeof window !== 'undefined') {
           activeToken = sessionStorage.getItem(`table_token_${slug}`);
@@ -132,12 +388,28 @@ export default function CustomerMenuPage() {
               setTable(tableData);
               sessionStorage.setItem(`table_token_${slug}`, activeToken);
 
-              // Check if welcome screen has been seen in this session
               const welcomeSeen = sessionStorage.getItem(`welcome_seen_${slug}_${activeToken}`);
               if (!welcomeSeen) {
                 setShowWelcome(true);
                 sessionStorage.setItem(`welcome_seen_${slug}_${activeToken}`, 'true');
               }
+
+              // Instant cache display from localStorage
+              try {
+                const cachedOrders = localStorage.getItem(`table_orders_${slug}_${activeToken}`);
+                if (cachedOrders) {
+                  const parsed = JSON.parse(cachedOrders);
+                  if (Array.isArray(parsed) && parsed.length > 0) {
+                    setTableOrders(parsed);
+                    parsed.forEach((o) => {
+                      prevOrderStepsRef.current[o.id] = getOrderStep(o);
+                    });
+                  }
+                }
+              } catch {}
+
+              // Fetch fresh orders from DB
+              fetchTableOrders(activeToken);
             }
           }
         }
@@ -148,17 +420,28 @@ export default function CustomerMenuPage() {
       }
     }
 
-    loadData();
+    init();
 
-    // Subscribe to realtime item and cafe changes
-    const ch = supabase.channel(`menu-realtime-${slug}`);
+    // Subscribe to realtime item, category, cafe, and order changes
+    const ch = supabase.channel(`customer-realtime-${slug}`);
     ch.on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
-      loadData();
+      loadMenuData();
     })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => {
+        loadMenuData();
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'cafes' }, (payload) => {
         if (payload.new && payload.new.slug === slug) {
           setCafe(payload.new);
         }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        const token = typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null;
+        if (token) fetchTableOrders(token);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_stations' }, () => {
+        const token = typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null;
+        if (token) fetchTableOrders(token);
       })
       .subscribe();
 
@@ -166,7 +449,100 @@ export default function CustomerMenuPage() {
       isMounted = false;
       supabase.removeChannel(ch);
     };
-  }, [slug, urlToken, setLang]);
+  }, [slug, urlToken, setLang, fetchTableOrders, loadMenuData]);
+
+  // Determine if there is any active open order
+  const hasOpenOrder = useMemo(() => {
+    return tableOrders.some((o) => {
+      const step = getOrderStep(o);
+      return step > 0 && step < 4;
+    });
+  }, [tableOrders]);
+
+  // Active open order for hero tracker
+  const activeTableOrder = useMemo(() => {
+    return (
+      tableOrders.find((o) => {
+        const step = getOrderStep(o);
+        return step > 0 && step < 4;
+      }) || (activeOrder?.id ? tableOrders.find((o) => o.id === activeOrder.id) : null)
+    );
+  }, [tableOrders, activeOrder]);
+
+  // Polling: every 4s if an order is open, every 15s otherwise. Pauses when hidden.
+  useEffect(() => {
+    const token =
+      table?.token ||
+      (typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null);
+
+    if (!token) return;
+
+    let timeoutId = null;
+
+    const schedulePoll = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (typeof document !== 'undefined' && document.hidden) return;
+
+      const interval = hasOpenOrder ? 4000 : 15000;
+      timeoutId = setTimeout(async () => {
+        if (typeof document !== 'undefined' && !document.hidden && navigator.onLine) {
+          await fetchTableOrders(token);
+        }
+        schedulePoll();
+      }, interval);
+    };
+
+    schedulePoll();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchTableOrders(token);
+        loadMenuData();
+        schedulePoll();
+      } else {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+    };
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      fetchTableOrders(token);
+      loadMenuData();
+      schedulePoll();
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    const handleFocus = () => {
+      fetchTableOrders(token);
+      loadMenuData();
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [table?.token, slug, hasOpenOrder, fetchTableOrders, loadMenuData]);
+
+  // Menu periodic refresh every 30s as safety net
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && !document.hidden && navigator.onLine) {
+        loadMenuData();
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [loadMenuData]);
 
   // Auto-dismiss Welcome Screen after 2.5 seconds
   useEffect(() => {
@@ -183,30 +559,6 @@ export default function CustomerMenuPage() {
     setWelcomeFading(true);
     setTimeout(() => setShowWelcome(false), 250);
   };
-
-  // Poll Active Order Status if an order was placed
-  useEffect(() => {
-    if (!activeOrder?.id) return;
-
-    const interval = setInterval(async () => {
-      try {
-        const { data: statusData } = await supabase.rpc('get_order_status', {
-          p_order_id: activeOrder.id,
-        });
-
-        if (statusData?.status) {
-          setActiveOrder((prev) => ({
-            ...prev,
-            status: statusData.status,
-          }));
-        }
-      } catch (e) {
-        console.error('Error polling order status:', e);
-      }
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, [activeOrder?.id]);
 
   // Cart operations
   const addToCart = (item, qty = 1, note = '') => {
@@ -272,14 +624,34 @@ export default function CustomerMenuPage() {
       }
 
       if (data?.order_id) {
-        setActiveOrder({
+        const newOrder = {
           id: data.order_id,
           table_name: data.table_name || table.name,
-          status: 'open', // 'open' = Received
+          status: 'open',
+          note: orderNote.trim(),
+          created_at: new Date().toISOString(),
+          items: cart.map((i) => ({
+            name: i.name,
+            qty: i.qty,
+            price: Number(i.price || 0),
+            note: i.note || '',
+          })),
+          stations: [{ station: 'bar', status: 'new' }],
+        };
+        prevOrderStepsRef.current[newOrder.id] = 1;
+        setTableOrders((prev) => {
+          const updated = [newOrder, ...prev.filter((o) => o.id !== newOrder.id)];
+          try {
+            localStorage.setItem(`table_orders_${slug}_${table.token}`, JSON.stringify(updated));
+            localStorage.setItem(`table_order_ids_${slug}_${table.token}`, JSON.stringify(updated.map((o) => o.id)));
+          } catch {}
+          return updated;
         });
+        setActiveOrder(newOrder);
         setCart([]);
         setCartOpen(false);
         setOrderSuccessModal(true);
+        fetchTableOrders(table.token);
       }
     } catch (err) {
       alert(err.message || 'Error submitting order');
@@ -386,6 +758,81 @@ export default function CustomerMenuPage() {
         paddingBottom: 110,
       }}
     >
+      {/* ─── OFFLINE NOTICE BANNER ─────────────────────────────────────────── */}
+      {!isOnline && (
+        <div
+          style={{
+            position: 'sticky',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 99999,
+            backgroundColor: '#DC2626',
+            color: '#FFF',
+            padding: '9px 16px',
+            textAlign: 'center',
+            fontSize: 13,
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+          }}
+        >
+          <WifiOff size={16} />
+          <span>
+            {t('menu.offline_notice') ||
+              (isAmharic
+                ? 'የኢንተርኔት ግንኙነት የለም። እንደገና በመገናኘት ላይ...'
+                : 'No connection. Trying to reconnect...')}
+          </span>
+        </div>
+      )}
+
+      {/* ─── ORDER READY TOAST NOTIFICATION ──────────────────────────────────── */}
+      {toastMessage && (
+        <div
+          className="anim-slide-up"
+          style={{
+            position: 'fixed',
+            top: !isOnline ? 52 : 20,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 100000,
+            backgroundColor: 'var(--color-espresso)',
+            color: '#FFFDF9',
+            padding: '12px 20px',
+            borderRadius: 999,
+            boxShadow: 'var(--shadow-float)',
+            border: '1.5px solid var(--color-sage)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            fontSize: 14,
+            fontWeight: 600,
+            maxWidth: '90vw',
+          }}
+        >
+          <Sparkles size={18} color="var(--color-sage)" />
+          <span>{toastMessage}</span>
+          <button
+            onClick={() => setToastMessage(null)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#FFF',
+              cursor: 'pointer',
+              padding: 2,
+              display: 'flex',
+              marginLeft: 4,
+            }}
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
+
       {/* ─── 4. CAFE WELCOME SPLASH SCREEN (Shown once per table session) ─────── */}
       {showWelcome && (
         <div
@@ -593,6 +1040,33 @@ export default function CustomerMenuPage() {
                 borderTop: '1px solid var(--color-line)',
               }}
             >
+              {/* Live Status indicator */}
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '3px 9px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  backgroundColor: isOnline ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                  color: isOnline ? '#16A34A' : '#DC2626',
+                  border: `1px solid ${isOnline ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                }}
+              >
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: '50%',
+                    backgroundColor: isOnline ? '#22C55E' : '#EF4444',
+                    animation: isOnline ? 'livePulse 1.8s infinite' : 'none',
+                  }}
+                />
+                <span>{isOnline ? (t('menu.live_indicator') || (isAmharic ? 'ቀጥታ' : 'Live')) : (isAmharic ? 'ከመስመር ውጭ' : 'Offline')}</span>
+              </div>
+
               <Badge variant="success" size="sm" dot>
                 {isAmharic ? 'እስከ 4:00 ክፍት ነው' : 'Open until 10 PM'}
               </Badge>
@@ -605,6 +1079,49 @@ export default function CustomerMenuPage() {
                 <Badge variant="neutral" size="sm">
                   👀 {isAmharic ? 'የእይታ ሁነታ' : 'View-only mode'}
                 </Badge>
+              )}
+
+              {/* My Orders shortcut — only in table ordering mode */}
+              {table && (
+                <button
+                  onClick={() => setMyOrdersOpen(true)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '4px 12px',
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    border: '1.5px solid var(--color-roast)',
+                    background: 'transparent',
+                    color: 'var(--color-roast)',
+                    cursor: 'pointer',
+                    marginLeft: 'auto',
+                  }}
+                >
+                  <ClipboardList size={13} />
+                  <span>{t('menu.my_orders') || (isAmharic ? 'ትዕዛዞቼ' : 'My Orders')}</span>
+                  {tableOrders.length > 0 && (
+                    <span
+                      style={{
+                        minWidth: 18,
+                        height: 18,
+                        borderRadius: '50%',
+                        background: 'var(--color-roast)',
+                        color: '#FFF',
+                        fontSize: 10,
+                        fontWeight: 800,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '0 4px',
+                      }}
+                    >
+                      {tableOrders.length}
+                    </span>
+                  )}
+                </button>
               )}
             </div>
 
@@ -621,85 +1138,52 @@ export default function CustomerMenuPage() {
           </div>
         </div>
 
-        {/* ─── LIVE ORDER STATUS TRACKER (If active customer order) ───────────── */}
-        {activeOrder && (
+        {/* ─── LIVE ORDER STATUS TRACKER (If active table order) ───────────── */}
+        {activeTableOrder && (
           <div style={{ padding: '0 20px', marginTop: 16 }}>
             <div
               className="card anim-slide-up"
               style={{
                 backgroundColor: 'var(--color-espresso)',
                 color: '#FFFDF9',
-                padding: 20,
+                padding: 18,
                 border: '1.5px solid var(--color-roast)',
+                boxShadow: 'var(--shadow)',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: 'var(--color-sage)', animation: 'livePulse 2s infinite' }} />
-                  <span style={{ fontWeight: 700, fontSize: 15 }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>
                     {isAmharic ? 'የቀጥታ የትዕዛዝ ሁኔታ' : 'Live Order Tracker'}
                   </span>
+                  <span style={{ fontSize: 12, color: 'var(--color-caramel)', fontWeight: 600 }}>
+                    · {activeTableOrder.table_name || table?.name}
+                  </span>
                 </div>
-                <span style={{ fontSize: 12, color: 'var(--color-caramel)', fontWeight: 600 }}>
-                  {activeOrder.table_name}
-                </span>
+                <button
+                  onClick={() => setMyOrdersOpen(true)}
+                  style={{
+                    background: 'rgba(255,255,255,0.12)',
+                    border: '1px solid rgba(255,255,255,0.25)',
+                    color: '#FFF',
+                    borderRadius: 999,
+                    padding: '2px 9px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {isAmharic ? 'ሁሉንም ተመልከት' : 'View Orders'} ({tableOrders.length})
+                </button>
               </div>
 
-              {/* 3-Step Progress */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, textAlign: 'center' }}>
-                {/* Step 1: Received */}
-                <div
-                  style={{
-                    padding: '8px 4px',
-                    borderRadius: 8,
-                    background: activeOrder.status ? 'rgba(107, 143, 113, 0.25)' : 'rgba(255,255,255,0.06)',
-                    color: activeOrder.status ? 'var(--color-sage)' : 'rgba(255,255,255,0.4)',
-                    fontSize: 12,
-                    fontWeight: 600,
-                  }}
-                >
-                  <CheckCircle2 size={16} style={{ margin: '0 auto 4px' }} />
-                  <div>{isAmharic ? 'ተቀብለናል' : 'Received'}</div>
-                </div>
-
-                {/* Step 2: Preparing */}
-                <div
-                  style={{
-                    padding: '8px 4px',
-                    borderRadius: 8,
-                    background: activeOrder.status === 'preparing' || activeOrder.status === 'ready'
-                      ? 'rgba(227, 163, 43, 0.25)'
-                      : 'rgba(255,255,255,0.06)',
-                    color: activeOrder.status === 'preparing' || activeOrder.status === 'ready'
-                      ? 'var(--color-amber)'
-                      : 'rgba(255,255,255,0.4)',
-                    fontSize: 12,
-                    fontWeight: 600,
-                  }}
-                >
-                  <Flame size={16} style={{ margin: '0 auto 4px' }} />
-                  <div>{isAmharic ? 'በመዘጋጀት ላይ' : 'Preparing'}</div>
-                </div>
-
-                {/* Step 3: Ready */}
-                <div
-                  style={{
-                    padding: '8px 4px',
-                    borderRadius: 8,
-                    background: activeOrder.status === 'ready'
-                      ? 'rgba(107, 143, 113, 0.35)'
-                      : 'rgba(255,255,255,0.06)',
-                    color: activeOrder.status === 'ready'
-                      ? 'var(--color-sage)'
-                      : 'rgba(255,255,255,0.4)',
-                    fontSize: 12,
-                    fontWeight: 600,
-                  }}
-                >
-                  <Coffee size={16} style={{ margin: '0 auto 4px' }} />
-                  <div>{isAmharic ? 'ዝግጁ ነው!' : 'Ready!'}</div>
-                </div>
-              </div>
+              {/* 4-Step Progress Stepper */}
+              <OrderStepper
+                step={getOrderStep(activeTableOrder)}
+                isAmharic={isAmharic}
+                t={t}
+              />
             </div>
           </div>
         )}
@@ -1221,6 +1705,203 @@ export default function CustomerMenuPage() {
             {isAmharic ? 'ትዕዛዙን ላክ' : 'Send Order to Barista'}
           </Button>
         </div>
+      </BottomSheet>
+
+      {/* ─── MY ORDERS HISTORY BOTTOM SHEET ─────────────────────────────────── */}
+      <BottomSheet
+        isOpen={myOrdersOpen}
+        onClose={() => setMyOrdersOpen(false)}
+        title={t('menu.my_orders') || (isAmharic ? 'የጠረጴዛ ትዕዛዞቼ' : 'My Orders')}
+        subtitle={table ? `${table.name} · ${isAmharic ? 'ከ6 ሰዓት ወዲህ' : 'Last 6 hours'}` : ''}
+      >
+        {loadingOrders && tableOrders.length === 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '12px 0' }}>
+            <Skeleton height={110} borderRadius={16} />
+            <Skeleton height={110} borderRadius={16} />
+          </div>
+        ) : ordersError && tableOrders.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '32px 16px' }}>
+            <AlertCircle size={40} color="#E53E3E" style={{ margin: '0 auto 12px' }} />
+            <h4 style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-espresso)', marginBottom: 6 }}>
+              {isAmharic ? 'ትዕዛዞችን መጫን አልተቻለም' : 'Could not load orders'}
+            </h4>
+            <p style={{ fontSize: 13, color: 'var(--color-muted)', marginBottom: 18 }}>
+              {isAmharic ? 'የግንኙነት ችግር አጋጥሟል። እባክዎ እንደገና ይሞክሩ።' : 'A connection issue occurred. Please check your network and retry.'}
+            </p>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                setLoadingOrders(true);
+                fetchTableOrders().finally(() => setLoadingOrders(false));
+              }}
+              iconLeft={<RotateCw size={14} />}
+            >
+              {isAmharic ? 'እንደገና ሞክር' : 'Retry'}
+            </Button>
+          </div>
+        ) : tableOrders.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--color-muted)' }}>
+            <ClipboardList size={44} style={{ margin: '0 auto 12px', opacity: 0.3 }} />
+            <h4 style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-espresso)', marginBottom: 6 }}>
+              {t('menu.no_orders_yet') || (isAmharic ? 'ምንም ትዕዛዝ የለም' : 'No orders yet')}
+            </h4>
+            <p style={{ fontSize: 13, maxWidth: 280, margin: '0 auto', lineHeight: 1.5 }}>
+              {t('menu.no_orders_desc') ||
+                (isAmharic
+                  ? 'ከዚህ ጠረጴዛ የሚታዘዙ ትዕዛዞች እዚህ በቀጥታ ይታያሉ።'
+                  : 'Orders placed from this table will appear here in real time.')}
+            </p>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {tableOrders.map((order) => {
+              const orderStep = getOrderStep(order);
+              return (
+                <div
+                  key={order.id}
+                  style={{
+                    border: '1px solid var(--color-line)',
+                    borderRadius: 'var(--radius-card)',
+                    padding: 16,
+                    backgroundColor: 'var(--color-foam)',
+                    boxShadow: 'var(--shadow-sm)',
+                  }}
+                >
+                  {/* Order header */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: 8,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--color-espresso)' }}>
+                        {order.table_name || table?.name || (isAmharic ? 'ጠረጴዛ' : 'Table')}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 10.5,
+                          fontWeight: 700,
+                          padding: '2px 7px',
+                          borderRadius: 999,
+                          backgroundColor:
+                            orderStep === 3
+                              ? 'var(--color-sage-light)'
+                              : orderStep === 2
+                              ? 'var(--color-amber-light)'
+                              : orderStep === 4
+                              ? 'var(--color-cream)'
+                              : 'var(--color-cream)',
+                          color:
+                            orderStep === 3
+                              ? 'var(--color-sage)'
+                              : orderStep === 2
+                              ? 'var(--color-amber)'
+                              : orderStep === 4
+                              ? 'var(--color-muted)'
+                              : 'var(--color-caramel)',
+                          border: '1px solid currentColor',
+                        }}
+                      >
+                        {orderStep === 3
+                          ? (t('menu.order_ready') || (isAmharic ? 'ዝግጁ ሆኗል' : 'Ready'))
+                          : orderStep === 2
+                          ? (t('menu.order_preparing') || (isAmharic ? 'በመዘጋጀት ላይ' : 'Being prepared'))
+                          : orderStep === 4
+                          ? (t('menu.order_served') || (isAmharic ? 'ቀርቧል' : 'Served'))
+                          : orderStep === -1
+                          ? (isAmharic ? 'ተሰርዟል' : 'Cancelled')
+                          : (t('menu.order_received') || (isAmharic ? 'ደርሷል' : 'Received'))}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 11, color: 'var(--color-muted)' }}>
+                      {order.created_at
+                        ? new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : ''}
+                    </span>
+                  </div>
+
+                  {/* Stepper */}
+                  <OrderStepper step={orderStep} isAmharic={isAmharic} t={t} />
+
+                  {/* Items */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+                    {(order.items || []).map((it, idx) => {
+                      const itemName = pick(it.name, lang, cafe?.default_language);
+                      return (
+                        <div
+                          key={idx}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            fontSize: 13,
+                            color: 'var(--color-espresso)',
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          <span>
+                            <strong>{it.qty}×</strong> {itemName}
+                            {it.note ? (
+                              <span style={{ color: 'var(--color-muted)', fontSize: 11, marginLeft: 4 }}>
+                                ({it.note})
+                              </span>
+                            ) : null}
+                          </span>
+                          <span style={{ fontWeight: 600 }}>
+                            {Number(it.price * it.qty).toFixed(2)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Order note */}
+                  {order.note && (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        fontSize: 12,
+                        fontStyle: 'italic',
+                        color: 'var(--color-muted)',
+                        backgroundColor: 'rgba(0,0,0,0.02)',
+                        padding: '4px 8px',
+                        borderRadius: 6,
+                      }}
+                    >
+                      📝 {order.note}
+                    </div>
+                  )}
+
+                  {/* Total */}
+                  {order.items?.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        paddingTop: 8,
+                        borderTop: '1px dashed var(--color-line)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        fontWeight: 700,
+                        fontSize: 13,
+                      }}
+                    >
+                      <span style={{ color: 'var(--color-muted)' }}>
+                        {isAmharic ? 'ጠቅላላ' : 'Total'}
+                      </span>
+                      <span style={{ color: 'var(--color-espresso)' }}>
+                        {order.items.reduce((s, it) => s + Number(it.price || 0) * it.qty, 0).toFixed(2)}{' '}
+                        {cafe.currency || 'ETB'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </BottomSheet>
 
       {/* ─── ORDER PLACED CONFIRMATION MODAL ─────────────────────────────────── */}
