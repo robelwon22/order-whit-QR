@@ -5,6 +5,8 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { supabase, pick } from '../../lib/supabase';
 import { useI18n } from '../../lib/i18n';
 import { Logo, CoffeeIllustration } from '../../components/ui/Logo';
+import { CafeLogo } from '../../components/ui/CafeLogo';
+import { getDerivedTextColor, getDerivedButtonTextColor, getDerivedCardStyle } from '../../lib/theme';
 import { Button, IconButton } from '../../components/ui/Button';
 import { BottomSheet } from '../../components/ui/BottomSheet';
 import { QtyStepper, Badge, EmptyState, Skeleton } from '../../components/ui/Badge';
@@ -148,11 +150,17 @@ export default function CustomerMenuPage() {
 
     loadData();
 
-    // Subscribe to realtime item changes
+    // Subscribe to realtime item and cafe changes
     const ch = supabase.channel(`menu-realtime-${slug}`);
     ch.on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
       loadData();
-    }).subscribe();
+    })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'cafes' }, (payload) => {
+        if (payload.new && payload.new.slug === slug) {
+          setCafe(payload.new);
+        }
+      })
+      .subscribe();
 
     return () => {
       isMounted = false;
@@ -348,14 +356,32 @@ export default function CustomerMenuPage() {
 
   const defLang = cafe.default_language || 'en';
   const cafeTheme = cafe.theme || {};
-  const primaryColor = cafeTheme.primary || 'var(--color-roast)';
-  const accentColor = 'var(--color-caramel)';
+  const brandColor = cafeTheme.primary || cafeTheme.button || '#6F4E37';
+  const bgColor = cafeTheme.background || '#FFFFFF';
+  const textColor = cafeTheme.text || getDerivedTextColor(bgColor);
+  const btnTextColor = getDerivedButtonTextColor(brandColor);
+  const cardStyle = getDerivedCardStyle(bgColor);
+  const primaryColor = brandColor;
+  const accentColor = brandColor;
 
   return (
     <div
       style={{
-        backgroundColor: 'var(--bg)',
-        color: 'var(--text)',
+        '--bg': bgColor,
+        '--color-cream': bgColor,
+        '--card-bg': cardStyle.cardBg,
+        '--color-foam': cardStyle.cardBg,
+        '--text': textColor,
+        '--color-espresso': brandColor,
+        '--color-muted': cardStyle.mutedText,
+        '--border': cardStyle.cardBorder,
+        '--color-line': cardStyle.cardBorder,
+        '--primary': brandColor,
+        '--color-roast': brandColor,
+        '--color-caramel': brandColor,
+        '--btn-text': btnTextColor,
+        backgroundColor: bgColor,
+        color: textColor,
         minHeight: '100vh',
         paddingBottom: 110,
       }}
@@ -418,23 +444,15 @@ export default function CustomerMenuPage() {
 
           {/* Center Brand & Table Chip */}
           <div style={{ textAlign: 'center', margin: 'auto 0' }}>
-            <div style={{ marginBottom: 20 }}>
-              {cafe.logo_url ? (
-                <img
-                  src={cafe.logo_url}
-                  alt={cafe.name}
-                  style={{
-                    width: 80,
-                    height: 80,
-                    borderRadius: 'var(--radius-card)',
-                    objectFit: 'cover',
-                    margin: '0 auto',
-                    border: '3px solid rgba(255,255,255,0.2)',
-                  }}
-                />
-              ) : (
-                <CoffeeIllustration size={130} />
-              )}
+            <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'center' }}>
+              <CafeLogo
+                logoUrl={cafe.logo_url}
+                name={cafe.name}
+                brandColor={brandColor}
+                size={84}
+                radius={20}
+                border="3px solid rgba(255,255,255,0.25)"
+              />
             </div>
 
             <div style={{ marginBottom: 14 }}>
@@ -536,38 +554,14 @@ export default function CustomerMenuPage() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
-              {cafe.logo_url ? (
-                <img
-                  src={cafe.logo_url}
-                  alt={cafe.name}
-                  style={{
-                    width: 64,
-                    height: 64,
-                    borderRadius: 16,
-                    objectFit: 'cover',
-                    border: '2px solid var(--color-line)',
-                    boxShadow: 'var(--shadow-sm)',
-                    flexShrink: 0,
-                  }}
-                />
-              ) : (
-                <div
-                  style={{
-                    width: 64,
-                    height: 64,
-                    borderRadius: 16,
-                    backgroundColor: 'var(--color-cream)',
-                    border: '2px solid var(--color-line)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 28,
-                    flexShrink: 0,
-                  }}
-                >
-                  ☕
-                </div>
-              )}
+              <CafeLogo
+                logoUrl={cafe.logo_url}
+                name={cafe.name}
+                brandColor={brandColor}
+                size={64}
+                radius={16}
+                border="2px solid var(--color-line)"
+              />
 
               <div style={{ flex: 1, minWidth: 0 }}>
                 <h1
@@ -787,7 +781,7 @@ export default function CustomerMenuPage() {
                 fontSize: 13,
                 fontWeight: activeCategory === 'all' ? 700 : 500,
                 background: activeCategory === 'all' ? 'var(--color-roast)' : 'var(--color-foam)',
-                color: activeCategory === 'all' ? '#FFF' : 'var(--color-espresso)',
+                color: activeCategory === 'all' ? 'var(--btn-text, #FFF)' : 'var(--text)',
                 border: `1.5px solid ${activeCategory === 'all' ? 'var(--color-roast)' : 'var(--color-line)'}`,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
@@ -809,7 +803,7 @@ export default function CustomerMenuPage() {
                     fontSize: 13,
                     fontWeight: isActive ? 700 : 500,
                     background: isActive ? 'var(--color-roast)' : 'var(--color-foam)',
-                    color: isActive ? '#FFF' : 'var(--color-espresso)',
+                    color: isActive ? 'var(--btn-text, #FFF)' : 'var(--text)',
                     border: `1.5px solid ${isActive ? 'var(--color-roast)' : 'var(--color-line)'}`,
                     cursor: 'pointer',
                     whiteSpace: 'nowrap',

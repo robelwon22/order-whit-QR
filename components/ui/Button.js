@@ -41,12 +41,12 @@ export function Button({
   const variantStyles = {
     primary: {
       background: 'var(--color-roast)',
-      color: '#FFFFFF',
+      color: 'var(--btn-text, #FFFFFF)',
       boxShadow: '0 2px 8px rgba(111, 78, 55, 0.22)',
     },
     accent: {
       background: 'var(--color-caramel)',
-      color: '#FFFFFF',
+      color: 'var(--btn-text, #FFFFFF)',
       boxShadow: '0 2px 8px rgba(201, 138, 75, 0.25)',
     },
     secondary: {

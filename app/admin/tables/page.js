@@ -10,6 +10,7 @@ import { Button, IconButton } from '../../../components/ui/Button';
 import { Input, Select, Toggle } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
 import { Badge, EmptyState, Skeleton, ConfirmDialog } from '../../../components/ui/Badge';
+import { getCafeLogoHtml } from '../../../components/ui/CafeLogo';
 import {
   getSiteUrl,
   isInvalidForProduction,
@@ -281,12 +282,19 @@ export default function TablesAdminPage() {
       .map((t) => {
         const url = buildTableQrUrl(activeCafe.slug, t.token);
         const svg = generateQRSvg(url, 240, 4);
+        const logoHtml = getCafeLogoHtml({
+          logoUrl: activeCafe.logo_url,
+          name: activeCafe.name,
+          brandColor: activeCafe.theme?.primary || '#6F4E37',
+          size: 36,
+        });
 
         if (layout === 'tent') {
           return `
             <div class="tent-card">
               <div class="tent-half">
                 <div class="cafe-header">
+                  ${logoHtml}
                   <h3>${activeCafe.name}</h3>
                 </div>
                 <div class="qr-box">${svg}</div>
@@ -297,6 +305,7 @@ export default function TablesAdminPage() {
               <div class="fold-line"><span>FOLD HERE / እዚህ ጋር እጠፉት</span></div>
               <div class="tent-half rotate">
                 <div class="cafe-header">
+                  ${logoHtml}
                   <h3>${activeCafe.name}</h3>
                 </div>
                 <div class="qr-box">${svg}</div>
@@ -317,7 +326,7 @@ export default function TablesAdminPage() {
             <div class="cut-mark bottom-right"></div>
             <div class="qr-card">
               <div class="cafe-header">
-                <div class="cafe-logo-placeholder">☕</div>
+                ${logoHtml}
                 <div class="cafe-title">${activeCafe.name}</div>
               </div>
               <div class="qr-box">${svg}</div>

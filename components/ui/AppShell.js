@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Logo } from './Logo';
 import { LanguageSwitcher } from './LanguageSwitcher';
+import { useI18n } from '../../lib/i18n';
 import { Button, IconButton } from './Button';
 import {
   Coffee,
@@ -32,11 +33,13 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { t } = useI18n();
 
   const navItems = [
-    { label: 'Menu', href: '/admin', icon: Coffee },
-    { label: 'Tables & QR', href: '/admin/tables', icon: QrCode },
-    { label: 'Staff', href: '/admin/staff', icon: Users },
+    { label: t('admin.tabs.menu') || 'Menu', href: '/admin', icon: Coffee },
+    { label: t('admin.tabs.design') || 'Design', href: '/admin/design', icon: Palette },
+    { label: t('admin.tabs.tables') || 'Tables & QR', href: '/admin/tables', icon: QrCode },
+    { label: t('admin.tabs.staff') || 'Staff', href: '/admin/staff', icon: Users },
   ];
 
   // If super admin, add Super Admin shortcut
