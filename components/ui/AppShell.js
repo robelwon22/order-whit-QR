@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Logo } from './Logo';
@@ -34,6 +34,22 @@ export function AppShell({
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { t } = useI18n();
+
+  // Set browser tab icon (favicon) and title to cafe branding
+  useEffect(() => {
+    if (cafe?.logo_url) {
+      let link = document.querySelector("link[rel*='icon']");
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'shortcut icon';
+        document.head.appendChild(link);
+      }
+      link.href = cafe.logo_url;
+    }
+    if (cafe?.name) {
+      document.title = `${cafe.name} | Admin`;
+    }
+  }, [cafe?.logo_url, cafe?.name]);
 
   const navItems = [
     { label: t('admin.tabs.menu') || 'Menu', href: '/admin', icon: Coffee },

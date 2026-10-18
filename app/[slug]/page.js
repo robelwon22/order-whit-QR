@@ -53,7 +53,19 @@ export function getOrderStep(order) {
   return 1;
 }
 
+export function formatOrderTime(dateStr) {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
 function OrderStepper({ step, isAmharic, t }) {
+  const tr = typeof t === 'function' ? t : (k) => k;
   if (step === -1) {
     return (
       <div
@@ -72,7 +84,7 @@ function OrderStepper({ step, isAmharic, t }) {
       >
         <AlertCircle size={15} style={{ flexShrink: 0 }} />
         <span>
-          {t('menu.order_cancelled') ||
+          {tr('menu.order_cancelled') ||
             (isAmharic ? 'ተሰርዟል፣ እባክዎ ሰራተኞችን ይጠይቁ' : 'Cancelled, please ask the staff')}
         </span>
       </div>
@@ -80,10 +92,10 @@ function OrderStepper({ step, isAmharic, t }) {
   }
 
   const steps = [
-    { key: 1, label: t('menu.order_received') || (isAmharic ? 'ደርሷል' : 'Received') },
-    { key: 2, label: t('menu.order_preparing') || (isAmharic ? 'በመዘጋጀት ላይ' : 'Being prepared') },
-    { key: 3, label: t('menu.order_ready') || (isAmharic ? 'ዝግጁ ሆኗል' : 'Ready') },
-    { key: 4, label: t('menu.order_served') || (isAmharic ? 'ቀርቧል' : 'Served') },
+    { key: 1, label: tr('menu.order_received') || (isAmharic ? 'ደርሷል' : 'Received') },
+    { key: 2, label: tr('menu.order_preparing') || (isAmharic ? 'በመዘጋጀት ላይ' : 'Being prepared') },
+    { key: 3, label: tr('menu.order_ready') || (isAmharic ? 'ዝግጁ ሆኗል' : 'Ready') },
+    { key: 4, label: tr('menu.order_served') || (isAmharic ? 'ቀርቧል' : 'Served') },
   ];
 
   return (
@@ -174,10 +186,27 @@ function OrderStepper({ step, isAmharic, t }) {
 export default function CustomerMenuPage() {
   const { slug } = useParams();
   const searchParams = useSearchParams();
-  const { lang, setLang, isAmharic } = useI18n();
+  const { lang, setLang, t, isAmharic } = useI18n();
 
   // Data State
   const [cafe, setCafe] = useState(null);
+
+  // Set browser tab icon (favicon) and title from cafe branding
+  useEffect(() => {
+    if (!cafe) return;
+    if (cafe.name) {
+      document.title = `${cafe.name} | Menu`;
+    }
+    if (cafe.logo_url) {
+      let link = document.querySelector("link[rel*='icon']");
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'shortcut icon';
+        document.head.appendChild(link);
+      }
+      link.href = cafe.logo_url;
+    }
+  }, [cafe?.name, cafe?.logo_url]);
   const [cats, setCats] = useState([]);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1818,9 +1847,7 @@ export default function CustomerMenuPage() {
                       </span>
                     </div>
                     <span style={{ fontSize: 11, color: 'var(--color-muted)' }}>
-                      {order.created_at
-                        ? new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                        : ''}
+                      {formatOrderTime(order.created_at)}
                     </span>
                   </div>
 
