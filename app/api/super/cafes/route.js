@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { verifyStaffSession, getServiceRoleClient } from '../../../../lib/supabaseServer';
 
 const RESERVED_SLUGS = ['admin', 'login', 'bartender', 'super', 'api'];
+const BUSINESS_TYPES = ['coffee_house', 'restaurant', 'other'];
+const BUSINESS_CATEGORIES = ['bakery', 'catering', 'juice_bar', 'fast_food', 'dessert', 'bar', 'custom'];
 
 // Calculates start of today in Africa/Addis_Ababa timezone (UTC+3)
 function getAddisTodayStartISO() {
@@ -23,7 +25,7 @@ export async function GET(req) {
     // 1. Fetch all cafes
     const { data: cafes, error: cafesError } = await supabaseAdmin
       .from('cafes')
-      .select('id, name, slug, active, max_tables, default_language, languages, currency, created_at, theme')
+      .select('id, name, slug, active, max_tables, default_language, languages, currency, created_at, theme, settings')
       .order('created_at', { ascending: false });
 
     if (cafesError) {
@@ -149,6 +151,9 @@ export async function POST(req) {
       currency = 'ETB',
       max_tables = null,
       active_until = null,
+      business_type = 'coffee_house',
+      business_category = 'bakery',
+      business_what = '',
       admin_name,
       admin_email,
       admin_password,
@@ -157,6 +162,10 @@ export async function POST(req) {
     // Validate inputs
     if (!name?.trim()) {
       return NextResponse.json({ success: false, error: 'Cafe name is required' }, { status: 400 });
+    }
+    if (!BUSINESS_TYPES.includes(business_type) || !BUSINESS_CATEGORIES.includes(business_category)
+        || typeof business_what !== 'string' || business_what.length > 120) {
+      return NextResponse.json({ success: false, error: 'Business type or category is invalid' }, { status: 400 });
     }
 
     const cleanSlug = (slug || '').toLowerCase().trim();
@@ -194,6 +203,12 @@ export async function POST(req) {
         currency: currency || 'ETB',
         max_tables: max_tables ? Number(max_tables) : null,
         active: true,
+        settings: {
+          business_type,
+          business_category,
+          business_what: business_what.trim(),
+          bg: { mode: 'auto', own_photos: [], intensity: 'soft' },
+        },
       })
       .select()
       .single();

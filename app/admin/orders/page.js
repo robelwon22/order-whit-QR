@@ -112,7 +112,7 @@ function unclosedOrdersResponse(data) {
 
 function migrationHint(name, error) {
   const message = String(error || '').toLowerCase();
-  if (!/(does not exist|could not find the function|pgrst202|permission denied|42501)/.test(message)) return '';
+  if (!/(pgrst202|42883|could not find the function|function .* does not exist)/.test(message)) return '';
   return name === 'orders' ? 'admin.ordersPage.ordersMigrationHint' : 'admin.ordersPage.unclosedMigrationHint';
 }
 
@@ -773,7 +773,9 @@ export default function AdminOrdersPage() {
 
             {earlierOrdersError && (
               <div className="orders-error" role="alert">
-                <span>{t('admin.ordersPage.networkError')}</span>
+                {migrationHint('unclosed', diagnostics.unclosed?.error)
+                  ? <span>{t('admin.ordersPage.unclosedSetupError')}</span>
+                  : <span>{t('admin.ordersPage.networkError')}</span>}
                 {migrationHint('unclosed', diagnostics.unclosed?.error) && <span>{t(migrationHint('unclosed', diagnostics.unclosed?.error))}</span>}
                 <Button variant="secondary" onClick={loadUnclosedOrders}>{t('common.retry')}</Button>
               </div>
@@ -827,7 +829,9 @@ export default function AdminOrdersPage() {
               <div className="orders-error" role="alert">
                 <span>{error === 'future_date' ? t('admin.ordersPage.futureDateError')
                   : error === 'date_too_old' ? t('admin.ordersPage.oldDateError')
-                    : t('admin.ordersPage.networkError')}</span>
+                    : migrationHint('orders', diagnostics.orders?.error)
+                      ? t('admin.ordersPage.ordersSetupError')
+                      : t('admin.ordersPage.networkError')}</span>
                 {migrationHint('orders', diagnostics.orders?.error) && <span>{t(migrationHint('orders', diagnostics.orders?.error))}</span>}
                 <Button variant="secondary" onClick={retryOrders}>{t('common.retry')}</Button>
               </div>

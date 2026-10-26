@@ -6,6 +6,7 @@ import { useStaff } from '../../../lib/useStaff';
 import { useToast } from '../../../components/ui/Toast';
 import { useI18n } from '../../../lib/i18n';
 import { AppShell } from '../../../components/ui/AppShell';
+import { AdminBackground } from '../../../components/ui/AdminBackground';
 import { Button } from '../../../components/ui/Button';
 import * as alarm from '../../../lib/alarm';
 import {
@@ -36,6 +37,13 @@ export default function AdminSettingsPage() {
   const [savingBusinessDay, setSavingBusinessDay] = useState(false);
   const [dayStartHour, setDayStartHour] = useState(4);
   const [timezone, setTimezone] = useState('Africa/Addis_Ababa');
+  const [businessBackground, setBusinessBackground] = useState({
+    business_type: 'coffee_house',
+    business_category: 'bakery',
+    business_what: '',
+    bg: { mode: 'auto', own_photos: [], intensity: 'soft' },
+  });
+  const [savingBusinessBackground, setSavingBusinessBackground] = useState(false);
   const [playingPreview, setPlayingPreview] = useState(null); // tone name or 'custom'
 
   // Settings State
@@ -66,6 +74,21 @@ export default function AdminSettingsPage() {
     setDayStartHour(Number.isInteger(configuredHour) && configuredHour >= 0 && configuredHour <= 23 ? configuredHour : 4);
     setTimezone(cafe.settings?.timezone || 'Africa/Addis_Ababa');
   }, [cafe?.id, cafe?.settings?.day_start_hour, cafe?.settings?.timezone]);
+
+  useEffect(() => {
+    if (!cafe) return;
+    const settings = cafe.settings || {};
+    setBusinessBackground({
+      business_type: settings.business_type || 'coffee_house',
+      business_category: settings.business_category || 'bakery',
+      business_what: settings.business_what || '',
+      bg: {
+        mode: settings.bg?.mode || 'auto',
+        own_photos: Array.isArray(settings.bg?.own_photos) ? settings.bg.own_photos : [],
+        intensity: settings.bg?.intensity || 'soft',
+      },
+    });
+  }, [cafe?.id]);
 
   // Clean up audio on unmount
   useEffect(() => {
@@ -208,6 +231,7 @@ export default function AdminSettingsPage() {
         timezone,
         day_start_hour: Number(dayStartHour),
       };
+
       const { error: updateError } = await supabase
         .from('cafes')
         .update({ settings: updatedSettings })
@@ -221,6 +245,45 @@ export default function AdminSettingsPage() {
       showToast(err.message || (isAmharic ? 'ቅንብሮችን ማስቀመጥ አልተቻለም' : 'Could not save business day settings.'), 'error');
     } finally {
       setSavingBusinessDay(false);
+    }
+  };
+
+  const handleSaveBusinessBackground = async () => {
+    if (!cafe?.id) return;
+    setSavingBusinessBackground(true);
+    try {
+      const { data: latestCafe, error: readError } = await supabase
+        .from('cafes')
+        .select('settings')
+        .eq('id', cafe.id)
+        .single();
+      if (readError) throw readError;
+      const updatedSettings = {
+        ...(latestCafe?.settings || {}),
+        business_type: businessBackground.business_type || 'coffee_house',
+        business_category: businessBackground.business_category || 'bakery',
+        business_what: businessBackground.business_what || '',
+        bg: {
+          ...(latestCafe?.settings?.bg || {}),
+          ...businessBackground.bg,
+          own_photos: businessBackground.bg?.own_photos || [],
+        },
+      };
+      const { error } = await supabase.from('cafes').update({ settings: updatedSettings }).eq('id', cafe.id);
+      if (error) throw error;
+      setCafe?.({ ...cafe, settings: updatedSettings });
+      setBusinessBackground({
+        business_type: updatedSettings.business_type,
+        business_category: updatedSettings.business_category,
+        business_what: updatedSettings.business_what,
+        bg: updatedSettings.bg,
+      });
+      showToast(t('admin.businessBackground.saved'), 'success');
+    } catch (error) {
+      console.error('Could not save business background settings:', error);
+      showToast(error.message || t('admin.businessBackground.saveFailed'), 'error');
+    } finally {
+      setSavingBusinessBackground(false);
     }
   };
 
@@ -570,6 +633,18 @@ export default function AdminSettingsPage() {
               {isAmharic ? 'ቅንብሮችን መዝግብ' : 'Save Settings'}
             </Button>
           </div>
+        </div>
+
+        <div style={{ marginBottom: 24 }}>
+          <AdminBackground
+            cafe={cafe}
+            user={staff}
+            settings={businessBackground}
+            editor
+            onChange={setBusinessBackground}
+            onSave={handleSaveBusinessBackground}
+            saving={savingBusinessBackground}
+          />
         </div>
 
         <section

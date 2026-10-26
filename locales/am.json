@@ -205,6 +205,8 @@
       "backToToday": "ወደ ዛሬ ተመለስ",
       "newDayToast": "አዲስ ቀን ተጀምሯል።",
       "networkError": "ግንኙነት የለም። እባክዎ ኢንተርኔትዎን ያረጋግጡና እንደገና ይሞክሩ።",
+      "ordersSetupError": "ዳታቤዙ የዕለታዊ የትዕዛዝ ሪፖርት ተግባር የለውም።",
+      "unclosedSetupError": "ዳታቤዙ ያልተዘጉ ትዕዛዞችን የሚያሳየው ተግባር የለውም።",
       "printBlocked": "የቀኑን ሪፖርት ለማተም ብቅ-ባይ መስኮቶችን ይፍቀዱ።",
       "unclosedBanner": "ከቀደሙት ቀናት {{count}} ትዕዛዞች አልተዘጉም",
       "reviewUnclosed": "ትዕዛዞችን ይመልከቱ",
@@ -283,8 +285,8 @@
       "noReason": "ምክንያት አልተገለጸም",
       "futureDateError": "ይህ የስራ ቀን ወደፊት ነው። ዛሬን ወይም ከዛሬ በፊት ያለ ቀን ይምረጡ።",
       "oldDateError": "ይህ የስራ ቀን ከ365 ቀናት በላይ ያለፈ ነው። ቅርብ የሆነ ቀን ይምረጡ።",
-      "ordersMigrationHint": "በSupabase ውስጥ step5_orders_date_fix.sql ያስኪዱ። ከዚህ በፊት step3_order_changes.sql እና step4_admin_orders.sql መስራት አለባቸው።",
-      "unclosedMigrationHint": "በSupabase ውስጥ step4_admin_orders.sql ያስኪዱ፤ ይህ step3_order_changes.sql ይፈልጋል።",
+      "ordersMigrationHint": "በSupabase ውስጥ መጀመሪያ step3_order_changes.sql፣ ከዚያ step4_admin_orders.sql፣ በመጨረሻም step5_orders_date_fix.sql ያስኪዱ።",
+      "unclosedMigrationHint": "በSupabase ውስጥ መጀመሪያ step3_order_changes.sql፣ ከዚያ step4_admin_orders.sql ያስኪዱ።",
       "diagnosticsTitle": "የትዕዛዝ ምርመራ (?debug=1)",
       "settingsLoadError": "ቅንብሮችን መጫን አልተቻለም",
       "diagnosticNames": {
@@ -299,6 +301,61 @@
       "noDiagnosticError": "የለም",
       "diagnosticsWaiting": "እስካሁን ምንም ጥሪ አልተመዘገበም።",
       "dailyReport": "የቀኑ የትዕዛዝ ሪፖርት"
+    },
+    "businessBackground": {
+      "section": "የንግድ አይነት እና የጀርባ ምስል",
+      "businessType": "የንግድ አይነት",
+      "types": {
+        "coffee_house": "ቡና ቤት",
+        "restaurant": "ሬስቶራንት ወይም ካፌ",
+        "other": "ሌላ ንግድ"
+      },
+      "category": "ምን ይሸጣሉ?",
+      "categories": {
+        "bakery": "ዳቦ ቤት እና ኬኮች",
+        "catering": "የዝግጅት ምግብ",
+        "juice_bar": "ጁስ ቤት",
+        "fast_food": "ፈጣን ምግብ",
+        "dessert": "ጣፋጭ ምግቦች እና አይስ ክሬም",
+        "bar": "ባር እና ላውንጅ",
+        "custom": "ብጁ"
+      },
+      "whatSell": "የሚሸጡትን ይግለጹ",
+      "customPlaceholder": "ለምሳሌ፦ ለዝግጅት ኬኮች",
+      "mode": "የጀርባ ምስሎች",
+      "modes": {
+        "auto": "በራስ-ሰር",
+        "own": "የእኔ ምስሎች",
+        "menu": "የሜኑ ምስሎች",
+        "off": "ጠፍቷል"
+      },
+      "intensity": "የምስል ግልጽነት",
+      "intensities": {
+        "soft": "ለስላሳ",
+        "normal": "መደበኛ"
+      },
+      "motion": "በዚህ መሣሪያ ላይ የሚንቀሳቀስ ጀርባ",
+      "motionOptions": {
+        "on": "በርቷል",
+        "reduced": "የተቀነሰ እንቅስቃሴ",
+        "off": "ጠፍቷል"
+      },
+      "ownPhotos": "የምርትዎ ምስሎች",
+      "photoGuidance": "ከ12 ምስሎች {{count}}። ምስሎች ወደ WebP ከ300 KB በታች ይቀነሳሉ።",
+      "upload": "ምስል ጫን",
+      "uploading": "{{progress}}% በመጫን ላይ",
+      "uploadProgress": "የምስል መጫኛ ሂደት",
+      "imageOnly": "እባክዎ የምስል ፋይል ይምረጡ።",
+      "uploadUnavailable": "ምስሎችን መጫን የሚችሉት የካፌ አስተዳዳሪዎች ብቻ ናቸው።",
+      "photoLimit": "እስከ12 ምስሎች ብቻ መጫን ይችላሉ።",
+      "sessionExpired": "የመግቢያ ጊዜዎ አልቋል። ከመጫንዎ በፊት እንደገና ይግቡ።",
+      "uploadFailed": "ምስሉን መጫን አልተቻለም።",
+      "invalidPhotoPath": "ይህ ምስል በዚህ ካፌ የጀርባ ምስል አቃፊ ውስጥ አይገኝም።",
+      "ownPhotoAlt": "የካፌ ምርት ምስል",
+      "deletePhoto": "ምስል ሰርዝ",
+      "preview": "ቀጥታ ቅድመ እይታ",
+      "saved": "የንግድ አይነት እና የጀርባ ምስል ተቀምጧል።",
+      "saveFailed": "የንግድ ጀርባ ቅንብሮችን ማስቀመጥ አልተቻለም።"
     },
     "settings": {
       "title": "የካፌው ቅንብሮች",

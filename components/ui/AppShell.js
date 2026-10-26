@@ -7,6 +7,7 @@ import { Logo } from './Logo';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { useI18n } from '../../lib/i18n';
 import { Button, IconButton } from './Button';
+import { AdminBackground } from './AdminBackground';
 import {
   Coffee,
   Palette,
@@ -66,12 +67,15 @@ export function AppShell({
   return (
     <div
       style={{
+        position: 'relative',
+        isolation: 'isolate',
         display: 'flex',
         minHeight: '100vh',
-        backgroundColor: 'var(--bg)',
+        backgroundColor: 'transparent',
         color: 'var(--text)',
       }}
     >
+      <AdminBackground cafe={cafe} user={user} />
       {/* ─── Desktop Sidebar ────────────────────────────────────────────── */}
       <aside
         style={{
@@ -252,6 +256,8 @@ export function AppShell({
       {/* ─── Main Content Container ────────────────────────────────────────── */}
       <div
         style={{
+          position: 'relative',
+          zIndex: 1,
           flex: 1,
           display: 'flex',
           flexDirection: 'column',

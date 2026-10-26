@@ -9,6 +9,7 @@ import { useToast } from '../../components/ui/Toast';
 import { Logo } from '../../components/ui/Logo';
 import { Button, IconButton } from '../../components/ui/Button';
 import { Input, Select } from '../../components/ui/Input';
+import { BusinessTypeFields } from '../../components/ui/AdminBackground';
 import { Modal } from '../../components/ui/Modal';
 import { BottomSheet } from '../../components/ui/BottomSheet';
 import { Badge, EmptyState, Skeleton, ConfirmDialog } from '../../components/ui/Badge';
@@ -66,6 +67,11 @@ export default function SuperAdminPage() {
   const [newLanguages, setNewLanguages] = useState(['en', 'am']);
   const [newDefaultLang, setNewDefaultLang] = useState('en');
   const [newCurrency, setNewCurrency] = useState('ETB');
+  const [newBusinessSettings, setNewBusinessSettings] = useState({
+    business_type: 'coffee_house',
+    business_category: 'bakery',
+    business_what: '',
+  });
   const [newMaxTables, setNewMaxTables] = useState('');
   const [newActiveUntil, setNewActiveUntil] = useState(() => {
     const d = new Date();
@@ -157,6 +163,7 @@ export default function SuperAdminPage() {
           currency: newCurrency,
           max_tables: newMaxTables ? Number(newMaxTables) : null,
           active_until: newActiveUntil,
+          ...newBusinessSettings,
           admin_name: adminName,
           admin_email: adminEmail,
           admin_password: adminPassword,
@@ -182,6 +189,7 @@ export default function SuperAdminPage() {
       setAdminName('');
       setAdminEmail('');
       setAdminPassword('');
+      setNewBusinessSettings({ business_type: 'coffee_house', business_category: 'bakery', business_what: '' });
 
       await loadData();
     } catch (e) {
@@ -202,6 +210,9 @@ export default function SuperAdminPage() {
       languages: c.languages || ['en', 'am'],
       default_language: c.default_language || 'en',
       active_until: c.active_until ? c.active_until.split('T')[0] : '',
+      business_type: c.settings?.business_type || 'coffee_house',
+      business_category: c.settings?.business_category || 'bakery',
+      business_what: c.settings?.business_what || '',
     });
     setTempPassResult(null);
 
@@ -698,6 +709,8 @@ export default function SuperAdminPage() {
             />
           </div>
 
+          <BusinessTypeFields value={newBusinessSettings} onChange={setNewBusinessSettings} t={t} />
+
           <div
             style={{
               padding: '14px 16px',
@@ -804,6 +817,11 @@ export default function SuperAdminPage() {
                 type="date"
                 value={editForm.active_until}
                 onChange={(e) => setEditForm({ ...editForm, active_until: e.target.value })}
+              />
+              <BusinessTypeFields
+                value={editForm}
+                onChange={(businessSettings) => setEditForm({ ...editForm, ...businessSettings })}
+                t={t}
               />
             </div>
 

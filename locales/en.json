@@ -205,6 +205,8 @@
       "backToToday": "Back to today",
       "newDayToast": "A new day has started.",
       "networkError": "No connection. Please check your internet and try again.",
+      "ordersSetupError": "The database is missing the daily orders report function.",
+      "unclosedSetupError": "The database is missing the unclosed-orders function.",
       "printBlocked": "Allow pop-ups to print the daily report.",
       "unclosedBanner": "{{count}} orders from earlier days were never closed",
       "reviewUnclosed": "Review orders",
@@ -283,8 +285,8 @@
       "noReason": "No reason provided",
       "futureDateError": "That business day is in the future. Choose today or an earlier date.",
       "oldDateError": "That business day is more than 365 days old. Choose a more recent date.",
-      "ordersMigrationHint": "Run step5_orders_date_fix.sql in Supabase. It depends on step3_order_changes.sql and step4_admin_orders.sql.",
-      "unclosedMigrationHint": "Run step4_admin_orders.sql in Supabase; it depends on step3_order_changes.sql.",
+      "ordersMigrationHint": "In Supabase, run step3_order_changes.sql first, then step4_admin_orders.sql, and finally step5_orders_date_fix.sql.",
+      "unclosedMigrationHint": "In Supabase, run step3_order_changes.sql first, then step4_admin_orders.sql.",
       "diagnosticsTitle": "Order diagnostics (?debug=1)",
       "settingsLoadError": "Settings could not be loaded",
       "diagnosticNames": {
@@ -299,6 +301,61 @@
       "noDiagnosticError": "None",
       "diagnosticsWaiting": "No call recorded yet.",
       "dailyReport": "Daily orders report"
+    },
+    "businessBackground": {
+      "section": "Business type and background",
+      "businessType": "Business type",
+      "types": {
+        "coffee_house": "Coffee house",
+        "restaurant": "Restaurant or cafe",
+        "other": "Other business"
+      },
+      "category": "What do you sell?",
+      "categories": {
+        "bakery": "Bakery and cakes",
+        "catering": "Catering and events",
+        "juice_bar": "Juice bar",
+        "fast_food": "Fast food",
+        "dessert": "Desserts and ice cream",
+        "bar": "Bar and lounge",
+        "custom": "Custom"
+      },
+      "whatSell": "Describe what you sell",
+      "customPlaceholder": "e.g. cakes for catering",
+      "mode": "Background photos",
+      "modes": {
+        "auto": "Automatic",
+        "own": "My own photos",
+        "menu": "My menu photos",
+        "off": "Off"
+      },
+      "intensity": "Photo visibility",
+      "intensities": {
+        "soft": "Soft",
+        "normal": "Normal"
+      },
+      "motion": "Animated background on this device",
+      "motionOptions": {
+        "on": "On",
+        "reduced": "Reduced",
+        "off": "Off"
+      },
+      "ownPhotos": "Your product photos",
+      "photoGuidance": "{{count}} of 12 photos. Images are resized to WebP under 300 KB.",
+      "upload": "Upload photo",
+      "uploading": "Uploading {{progress}}%",
+      "uploadProgress": "Photo upload progress",
+      "imageOnly": "Choose an image file.",
+      "uploadUnavailable": "Photo upload is only available to cafe administrators.",
+      "photoLimit": "You can upload up to 12 photos.",
+      "sessionExpired": "Your session expired. Sign in again before uploading.",
+      "uploadFailed": "The photo could not be uploaded.",
+      "invalidPhotoPath": "This photo is not in this cafe's background folder.",
+      "ownPhotoAlt": "Cafe product photo",
+      "deletePhoto": "Delete photo",
+      "preview": "Live preview",
+      "saved": "Business type and background saved.",
+      "saveFailed": "Could not save business background settings."
     },
     "settings": {
       "title": "Cafe Settings",
