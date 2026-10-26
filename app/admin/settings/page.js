@@ -33,6 +33,9 @@ export default function AdminSettingsPage() {
   const { t, isAmharic } = useI18n();
 
   const [saving, setSaving] = useState(false);
+  const [savingBusinessDay, setSavingBusinessDay] = useState(false);
+  const [dayStartHour, setDayStartHour] = useState(4);
+  const [timezone, setTimezone] = useState('Africa/Addis_Ababa');
   const [playingPreview, setPlayingPreview] = useState(null); // tone name or 'custom'
 
   // Settings State
@@ -56,6 +59,13 @@ export default function AdminSettingsPage() {
       if (a.volume !== undefined) setAlertVolume(Number(a.volume));
     }
   }, [cafe?.settings?.alert]);
+
+  useEffect(() => {
+    if (!cafe) return;
+    const configuredHour = Number(cafe.settings?.day_start_hour);
+    setDayStartHour(Number.isInteger(configuredHour) && configuredHour >= 0 && configuredHour <= 23 ? configuredHour : 4);
+    setTimezone(cafe.settings?.timezone || 'Africa/Addis_Ababa');
+  }, [cafe?.id, cafe?.settings?.day_start_hour, cafe?.settings?.timezone]);
 
   // Clean up audio on unmount
   useEffect(() => {
@@ -142,7 +152,13 @@ export default function AdminSettingsPage() {
 
     setSaving(true);
     try {
-      const existingSettings = cafe.settings || {};
+      const { data: latestCafe, error: readError } = await supabase
+        .from('cafes')
+        .select('settings')
+        .eq('id', cafe.id)
+        .single();
+      if (readError) throw readError;
+      const existingSettings = latestCafe?.settings || {};
       const newAlertSettings = {
         ...existingSettings.alert,
         sound: selectedSound,
@@ -173,6 +189,38 @@ export default function AdminSettingsPage() {
       showToast(err.message || 'Failed to save settings', 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveBusinessDay = async () => {
+    if (!cafe?.id) return;
+    setSavingBusinessDay(true);
+    try {
+      const { data: latestCafe, error: readError } = await supabase
+        .from('cafes')
+        .select('settings')
+        .eq('id', cafe.id)
+        .single();
+      if (readError) throw readError;
+
+      const updatedSettings = {
+        ...(latestCafe?.settings || {}),
+        timezone,
+        day_start_hour: Number(dayStartHour),
+      };
+      const { error: updateError } = await supabase
+        .from('cafes')
+        .update({ settings: updatedSettings })
+        .eq('id', cafe.id);
+      if (updateError) throw updateError;
+
+      if (setCafe) setCafe({ ...cafe, settings: updatedSettings });
+      showToast(isAmharic ? 'የስራ ቀን ቅንብሮች ተቀምጠዋል' : 'Business day settings saved.', 'success');
+    } catch (err) {
+      console.error('Error saving business day settings:', err);
+      showToast(err.message || (isAmharic ? 'ቅንብሮችን ማስቀመጥ አልተቻለም' : 'Could not save business day settings.'), 'error');
+    } finally {
+      setSavingBusinessDay(false);
     }
   };
 
@@ -523,6 +571,78 @@ export default function AdminSettingsPage() {
             </Button>
           </div>
         </div>
+
+        <section
+          className="card"
+          aria-labelledby="business-day-settings-title"
+          style={{
+            backgroundColor: 'var(--color-foam)',
+            border: '1px solid var(--color-line)',
+            borderRadius: 'var(--radius-card)',
+            padding: 24,
+            boxShadow: 'var(--shadow-sm)',
+          }}
+        >
+          <div style={{ marginBottom: 18 }}>
+            <h2 id="business-day-settings-title" style={{ fontSize: 20, marginBottom: 6 }}>
+              {isAmharic ? 'ትዕዛዞች እና የስራ ቀን' : 'Orders and business day'}
+            </h2>
+            <p style={{ fontSize: 13 }}>
+              {isAmharic
+                ? 'የስራ ቀኑ በተመረጠው የሰዓት ሰቅ ይቆጠራል።'
+                : 'Choose when the cafe business day begins and the timezone used for order reports.'}
+            </p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 7, fontSize: 14, fontWeight: 700 }}>
+              {isAmharic ? 'የስራ ቀን የሚጀምርበት ሰዓት' : 'Business day starts at'}
+              <select value={dayStartHour} onChange={(event) => setDayStartHour(Number(event.target.value))}>
+                {Array.from({ length: 24 }, (_, hour) => (
+                  <option value={hour} key={hour}>
+                    {new Intl.DateTimeFormat(isAmharic ? 'am-ET' : 'en-US', {
+                      hour: 'numeric',
+                      hour12: true,
+                      timeZone: 'UTC',
+                    }).format(new Date(Date.UTC(2020, 0, 1, hour)))}
+                  </option>
+                ))}
+              </select>
+              <small style={{ color: 'var(--color-muted)', fontWeight: 400 }}>
+                {isAmharic
+                  ? 'ከዚህ ሰዓት በፊት የተቀመጡ ትዕዛዞች ወደ ቀደመው ቀን ይቆጠራሉ።'
+                  : 'Orders placed before this hour count toward the previous day.'}
+              </small>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 7, fontSize: 14, fontWeight: 700 }}>
+              {isAmharic ? 'የሰዓት ሰቅ' : 'Timezone'}
+              <select value={timezone} onChange={(event) => setTimezone(event.target.value)}>
+                {[
+                  'Africa/Addis_Ababa',
+                  'Africa/Cairo',
+                  'Africa/Johannesburg',
+                  'Africa/Nairobi',
+                  'Asia/Dubai',
+                  'Asia/Tokyo',
+                  'Europe/London',
+                  'Europe/Paris',
+                  'America/New_York',
+                  'America/Los_Angeles',
+                  'UTC',
+                ].map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+                {timezone && ![
+                  'Africa/Addis_Ababa', 'Africa/Cairo', 'Africa/Johannesburg', 'Africa/Nairobi',
+                  'Asia/Dubai', 'Asia/Tokyo', 'Europe/London', 'Europe/Paris',
+                  'America/New_York', 'America/Los_Angeles', 'UTC',
+                ].includes(timezone) && <option value={timezone}>{timezone}</option>}
+              </select>
+            </label>
+          </div>
+          <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
+            <Button variant="primary" loading={savingBusinessDay} onClick={handleSaveBusinessDay} icon={<Save size={16} />}>
+              {isAmharic ? 'ቅንብሮችን መዝግብ' : 'Save business day settings'}
+            </Button>
+          </div>
+        </section>
       </div>
     </AppShell>
   );

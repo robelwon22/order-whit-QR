@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState, useRef, useCallback, useMemo, Component } from 'react';
 import { supabase } from '../../lib/supabase';
+import { getCurrentBusinessDayStart, getNextBusinessDayStart } from '../../lib/businessDay';
+import { useI18n } from '../../lib/i18n';
 import * as alarm from '../../lib/alarm';
 import { useOrderAlarm } from '../../lib/useOrderAlarm';
 import { CoffeeIllustration, Logo } from '../../components/ui/Logo';
@@ -197,6 +199,7 @@ function formatText(val, fallback = '') {
 
 // ─── MAIN BARTENDER COMPONENT ──────────────────────────────────────────────
 function BartenderDashboardInner() {
+  const { isAmharic } = useI18n();
   const [mounted, setMounted] = useState(false);
   const [me, setMe] = useState(null);
   const [cafe, setCafe] = useState(null);
@@ -234,6 +237,7 @@ function BartenderDashboardInner() {
   const [orderItemsMap, setOrderItemsMap] = useState({});
   const [updatingId, setUpdatingId] = useState(null);
   const [filterTab, setFilterTab] = useState('active'); // 'active', 'served', 'all'
+  const [earlierPanelOpen, setEarlierPanelOpen] = useState(false);
 
   // Clock state for timer chips
   const [now, setNow] = useState(Date.now());
@@ -247,7 +251,15 @@ function BartenderDashboardInner() {
 
   // Synchronously compute newCount from the live queue
   const myStation = me?.station || 'bar';
-  const newCount = orders.reduce((count, order) => {
+  const businessDaySettings = cafe?.settings || {};
+  const businessDayStart = getCurrentBusinessDayStart(
+    new Date(now),
+    businessDaySettings.timezone || 'Africa/Addis_Ababa',
+    businessDaySettings.day_start_hour ?? 4
+  );
+  const currentOrders = orders.filter((order) => new Date(order.created_at).getTime() >= businessDayStart.getTime());
+  const earlierOrders = orders.filter((order) => new Date(order.created_at).getTime() < businessDayStart.getTime());
+  const newCount = currentOrders.reduce((count, order) => {
     if (order?.status !== 'open') return count;
     const stations = Array.isArray(order?.order_stations) ? order.order_stations : [];
     if (stations.length === 0) {
@@ -725,12 +737,43 @@ function BartenderDashboardInner() {
       console.warn('Realtime subscription notice:', err);
     }
 
+    const refreshInterval = setInterval(loadOrders, 30000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') loadOrders();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
+      clearInterval(refreshInterval);
+      document.removeEventListener('visibilitychange', handleVisibility);
       if (channel) {
         supabase.removeChannel(channel).catch(() => {});
       }
     };
   }, [me?.cafe_id, loadOrders]);
+
+  useEffect(() => {
+    if (!cafe) return undefined;
+    let boundaryTimer;
+    let cancelled = false;
+    const scheduleBoundaryRefresh = () => {
+      const nextBoundary = getNextBusinessDayStart(
+        new Date(),
+        cafe.settings?.timezone || 'Africa/Addis_Ababa',
+        cafe.settings?.day_start_hour ?? 4
+      );
+      boundaryTimer = setTimeout(async () => {
+        if (cancelled) return;
+        await loadOrders();
+        if (!cancelled) scheduleBoundaryRefresh();
+      }, Math.max(0, nextBoundary.getTime() - Date.now() + 50));
+    };
+    scheduleBoundaryRefresh();
+    return () => {
+      cancelled = true;
+      clearTimeout(boundaryTimer);
+    };
+  }, [cafe?.id, cafe?.settings?.timezone, cafe?.settings?.day_start_hour, loadOrders]);
 
   // Handle Start Shift click
   const handleStartShift = async () => {
@@ -1006,7 +1049,7 @@ function BartenderDashboardInner() {
   }
 
   // ─── FILTERING ORDERS ─────────────────────────────────────────────────────
-  const validOrders = orders.filter((o) => o && o.id);
+  const validOrders = currentOrders.filter((o) => o && o.id);
 
   const displayedOrders = validOrders.filter((order) => {
     if (filterTab === 'active') {
@@ -1299,6 +1342,49 @@ function BartenderDashboardInner() {
 
       {/* ─── ORDERS QUEUE ───────────────────────────────────────────────────── */}
       <main style={{ flex: 1, padding: '24px 20px', maxWidth: 1400, margin: '0 auto', width: '100%' }}>
+        {earlierOrders.length > 0 && (
+          <section style={{ marginBottom: 18, border: '1px solid #6B5335', borderRadius: 14, overflow: 'hidden', background: '#251A12' }}>
+            <button
+              type="button"
+              aria-expanded={earlierPanelOpen}
+              onClick={() => setEarlierPanelOpen((open) => !open)}
+              style={{
+                minHeight: 48,
+                width: '100%',
+                padding: '10px 16px',
+                textAlign: 'left',
+                color: '#FDE68A',
+                fontWeight: 800,
+                fontSize: 14,
+              }}
+            >
+              {isAmharic
+                ? `ካለፉት ቀናት (${earlierOrders.length})`
+                : `From earlier days (${earlierOrders.length})`}
+              <span style={{ float: 'right' }}>{earlierPanelOpen ? '−' : '+'}</span>
+            </button>
+            {earlierPanelOpen && (
+              <div style={{ padding: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 14 }}>
+                {earlierOrders.map((order) => (
+                  <OrderCardErrorBoundary key={order.id} onReload={loadOrders}>
+                    <OrderCard
+                      order={order}
+                      items={orderItemsMap[order.id] || []}
+                      now={now}
+                      mounted={mounted}
+                      isBusy={updatingId === order.id}
+                      isHighlighted={highlightedOrderId === order.id}
+                      onStationTransition={handleStationTransition}
+                      onOrderStatusTransition={handleOrderStatusTransition}
+                      onEdit={handleOpenStaffEdit}
+                      onCancel={handleOpenStaffCancel}
+                    />
+                  </OrderCardErrorBoundary>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
         {displayedOrders.length === 0 ? (
           <div style={{ maxWidth: 500, margin: '60px auto', textAlign: 'center' }}>
             <EmptyState
