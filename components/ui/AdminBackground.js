@@ -320,9 +320,9 @@ function BackgroundWall({ cafe, settings, compact = false, motion = 'on' }) {
       <style jsx global>{`
         .admin-bg-wall { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; background: var(--bg); isolation: isolate; }
         .admin-bg-wall.is-compact { position: relative; width: 100%; height: 280px; min-height: 220px; border-radius: 16px; border: 1px solid var(--border); }
-        .admin-bg-wall.is-normal { --admin-bg-opacity: .86; }
-        .admin-bg-wall { --admin-bg-opacity: .91; }
-        .admin-bg-vertical { position: absolute; inset: -18% -5%; display: flex; justify-content: space-evenly; gap: 2.5vw; transform: rotate(-6deg) scale(1.08); filter: blur(1.5px); }
+        .admin-bg-wall.is-normal { --admin-bg-opacity: .62; }
+        .admin-bg-wall { --admin-bg-opacity: .72; }
+        .admin-bg-vertical { position: absolute; inset: -18% -5%; display: flex; justify-content: space-evenly; gap: 2.5vw; transform: rotate(-6deg) scale(1.08); filter: blur(1px); }
         .admin-bg-column { flex: 1 1 0; max-width: 24vw; overflow: hidden; }
         .admin-bg-column-track { display: flex; flex-direction: column; gap: 18px; will-change: transform; }
         .admin-bg-column img { display: block; width: 100%; height: clamp(120px, 19vh, 230px); object-fit: cover; border-radius: 20px; box-shadow: 0 10px 28px rgba(36, 24, 16, .16); }
@@ -338,7 +338,7 @@ function BackgroundWall({ cafe, settings, compact = false, motion = 'on' }) {
         .admin-bg-wall.is-compact .admin-bg-column { max-width: none; }
         .admin-bg-wall.is-compact .admin-bg-column img { height: 145px; border-radius: 14px; }
         .admin-bg-wall.is-compact .admin-bg-strip-track img { height: 40px; }
-        .admin-bg-wall.is-compact .admin-bg-overlay { opacity: .74; }
+        .admin-bg-wall.is-compact .admin-bg-overlay { opacity: .38; }
         .admin-bg-wall.is-animated .admin-bg-column-0 .admin-bg-column-track { animation: admin-bg-up 72s linear infinite; }
         .admin-bg-wall.is-animated .admin-bg-column-1 .admin-bg-column-track { animation: admin-bg-down 82s linear infinite; }
         .admin-bg-wall.is-animated .admin-bg-strip-top .admin-bg-strip-track { animation: admin-bg-left 84s linear infinite; }
