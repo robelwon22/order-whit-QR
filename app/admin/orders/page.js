@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { isValidBusinessDay, shiftBusinessDay } from '../../../lib/businessDayDate.mjs';
 import { supabase, pick } from '../../../lib/supabase';
 import { useStaff } from '../../../lib/useStaff';
 import { useToast } from '../../../components/ui/Toast';
@@ -87,10 +88,32 @@ function escapeHtml(value) {
   })[character]);
 }
 
-function offsetForDay(day, todayDay) {
-  const selected = Date.parse(`${day}T00:00:00Z`);
-  const today = Date.parse(`${todayDay}T00:00:00Z`);
-  return Math.round((selected - today) / 86400000);
+function rpcErrorText(error) {
+  if (!error) return '';
+  return [error.message, error.details, error.hint, error.code].filter(Boolean).join(' ');
+}
+
+function orderResponse(data) {
+  const result = Array.isArray(data) ? data[0] : data;
+  if (!result || typeof result !== 'object' || !Array.isArray(result.orders)
+      || !result.from || !result.to || !isValidBusinessDay(result.day)) {
+    throw new Error('The order report returned an invalid response.');
+  }
+  return result;
+}
+
+function unclosedOrdersResponse(data) {
+  const result = Array.isArray(data) ? data : data?.orders;
+  if (!Array.isArray(result)) {
+    throw new Error('The unclosed-orders function returned an invalid response.');
+  }
+  return result;
+}
+
+function migrationHint(name, error) {
+  const message = String(error || '').toLowerCase();
+  if (!/(does not exist|could not find the function|pgrst202|permission denied|42501)/.test(message)) return '';
+  return name === 'orders' ? 'admin.ordersPage.ordersMigrationHint' : 'admin.ordersPage.unclosedMigrationHint';
 }
 
 export default function AdminOrdersPage() {
@@ -101,7 +124,7 @@ export default function AdminOrdersPage() {
   const { showToast } = useToast();
   const { t, lang, isAmharic } = useI18n();
   const [activeCafe, setActiveCafe] = useState(null);
-  const [dayOffset, setDayOffset] = useState(0);
+  const [selectedDay, setSelectedDay] = useState('');
   const [todayDay, setTodayDay] = useState('');
   const [dayData, setDayData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -111,6 +134,9 @@ export default function AdminOrdersPage() {
   const [unclosedOpen, setUnclosedOpen] = useState(false);
   const [closingId, setClosingId] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [diagnostics, setDiagnostics] = useState({});
+  const [debugEnabled, setDebugEnabled] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [tableFilter, setTableFilter] = useState('');
   const [acceptedByFilter, setAcceptedByFilter] = useState('');
@@ -119,79 +145,277 @@ export default function AdminOrdersPage() {
   const [sort, setSort] = useState('newest');
   const debounceRef = useRef(null);
   const requestIdRef = useRef(0);
-  const boundaryHandledRef = useRef('');
+  const selectedDayRef = useRef('');
+  const latestTodayRef = useRef('');
 
   useEffect(() => {
     if (cafe && (!activeCafe || activeCafe.id !== cafe.id)) setActiveCafe(cafe);
   }, [cafe, activeCafe]);
 
-  const loadSelectedDay = useCallback(async (offset, silent = false) => {
+  useEffect(() => {
+    const updateDebugAccess = () => {
+      setDebugEnabled(
+        new URLSearchParams(window.location.search).get('debug') === '1'
+        && ['cafe_admin', 'super_admin'].includes(staff?.role)
+      );
+    };
+    updateDebugAccess();
+    window.addEventListener('popstate', updateDebugAccess);
+    return () => window.removeEventListener('popstate', updateDebugAccess);
+  }, [staff?.role]);
+
+  useEffect(() => {
+    selectedDayRef.current = selectedDay;
+  }, [selectedDay]);
+
+  const updateDateUrl = useCallback((day, replace = false) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('date', day);
+    if (replace) window.history.replaceState(null, '', url);
+    else window.history.pushState(null, '', url);
+  }, []);
+
+  const recordDiagnostic = useCallback((name, call, parameters, data, error) => {
+    setDiagnostics((current) => ({
+      ...current,
+      [name]: { call, parameters, data, error: error ? rpcErrorText(error) : '' },
+    }));
+  }, []);
+
+  const loadSettings = useCallback(async () => {
+    if (!activeCafe?.id) return;
+    const parameters = { table: 'cafes', select: 'settings', id: activeCafe.id };
+    const { data, error: queryError } = await supabase
+      .from('cafes')
+      .select('settings')
+      .eq('id', activeCafe.id)
+      .single();
+    recordDiagnostic('settings', "supabase.from('cafes').select('settings').eq('id', cafeId).single()", parameters, data, queryError);
+    if (queryError) {
+      console.error('Failed to load cafe business-day settings:', queryError);
+      setSettingsError(rpcErrorText(queryError));
+      throw queryError;
+    }
+    setSettingsError('');
+    setActiveCafe((current) => current?.id === activeCafe.id
+      ? { ...current, settings: data?.settings || {} }
+      : current);
+  }, [activeCafe?.id, recordDiagnostic]);
+
+  const fetchOrders = useCallback(async (day) => {
+    const parameters = { p_cafe: activeCafe.id, p_day: day };
+    const { data, error: rpcError } = await supabase.rpc('admin_orders_on', parameters);
+    recordDiagnostic('orders', "supabase.rpc('admin_orders_on', { p_cafe, p_day })", parameters, data, rpcError);
+    if (rpcError) throw rpcError;
+    try {
+      return orderResponse(data);
+    } catch (responseError) {
+      recordDiagnostic('orders', "supabase.rpc('admin_orders_on', { p_cafe, p_day })", parameters, data, responseError);
+      throw responseError;
+    }
+  }, [activeCafe?.id, recordDiagnostic]);
+
+  const loadSelectedDay = useCallback(async (day, silent = false) => {
     if (!activeCafe?.id) return;
     const requestId = ++requestIdRef.current;
     if (!silent) setLoading(true);
     setError(false);
 
     try {
-      const { data, error: rpcError } = await supabase.rpc('admin_orders', {
-        p_cafe: activeCafe.id,
-        p_day_offset: offset,
-      });
-      if (rpcError) throw rpcError;
-      const result = Array.isArray(data) ? data[0] : data;
-      if (!result || !Array.isArray(result.orders) || !result.from || !result.to || !result.day) {
-        throw new Error('The order report returned an invalid response.');
-      }
+      const result = await fetchOrders(day === latestTodayRef.current ? null : day);
       if (requestId !== requestIdRef.current) return;
+      setSelectedDay(result.day);
+      selectedDayRef.current = result.day;
       setDayData(result);
-      if (offset === 0) setTodayDay(result.day);
+      if (day === null || day === latestTodayRef.current) {
+        setTodayDay(result.day);
+        latestTodayRef.current = result.day;
+      }
+      updateDateUrl(result.day, true);
       setSelectedOrder((current) => current
         ? result.orders.find((order) => order.id === current.id) || null
         : null);
+      return result;
     } catch (loadError) {
       console.error('Failed to load admin orders:', loadError);
-      if (requestId === requestIdRef.current) setError(true);
+      if (requestId === requestIdRef.current) {
+        const message = rpcErrorText(loadError);
+        setError(message.includes('future_date') ? 'future_date'
+          : message.includes('date_too_old') ? 'date_too_old' : true);
+      }
+      return null;
     } finally {
       if (requestId === requestIdRef.current) setLoading(false);
     }
-  }, [activeCafe?.id]);
+  }, [activeCafe?.id, fetchOrders, updateDateUrl]);
+
+  const retryOrders = useCallback(async () => {
+    if (selectedDay) {
+      loadSelectedDay(selectedDay);
+      return;
+    }
+    setLoading(true);
+    setError(false);
+    try {
+      await loadSettings();
+      const today = await fetchOrders(null);
+      latestTodayRef.current = today.day;
+      setTodayDay(today.day);
+      const requestedDay = new URLSearchParams(window.location.search).get('date');
+      const day = isValidBusinessDay(requestedDay) ? requestedDay : today.day;
+      if (day === today.day) {
+        setSelectedDay(today.day);
+        selectedDayRef.current = today.day;
+        setDayData(today);
+        updateDateUrl(today.day, true);
+        setLoading(false);
+      } else {
+        await loadSelectedDay(day);
+      }
+    } catch (retryError) {
+      console.error('Failed to retry loading the Orders page:', retryError);
+      setError(true);
+      setLoading(false);
+    }
+  }, [fetchOrders, loadSelectedDay, loadSettings, selectedDay, updateDateUrl]);
 
   useEffect(() => {
-    if (activeCafe?.id) {
-      setDayData(null);
-      setTodayDay('');
-      setDayOffset(0);
-      loadSelectedDay(0);
-    }
-  }, [activeCafe?.id, loadSelectedDay]);
+    if (!activeCafe?.id) return undefined;
+    let cancelled = false;
+    const requestedDay = new URLSearchParams(window.location.search).get('date');
+    const initialDay = isValidBusinessDay(requestedDay) ? requestedDay : null;
+    setDayData(null);
+    setSelectedDay('');
+    selectedDayRef.current = '';
+    setTodayDay('');
+    latestTodayRef.current = '';
+    setLoading(true);
+    setError(false);
 
-  const loadUnclosedOrders = useCallback(async (from) => {
-    if (!activeCafe?.id || !from) return;
+    const initialize = async () => {
+      try {
+        await loadSettings();
+        if (cancelled) return;
+        const today = await fetchOrders(null);
+        if (cancelled) return;
+        setTodayDay(today.day);
+        latestTodayRef.current = today.day;
+        const targetDay = initialDay || today.day;
+        setSelectedDay(targetDay);
+        selectedDayRef.current = targetDay;
+        if (targetDay !== today.day) {
+          await loadSelectedDay(targetDay);
+        } else {
+          setDayData(today);
+          setSelectedDay(today.day);
+          selectedDayRef.current = today.day;
+          updateDateUrl(today.day, true);
+          setLoading(false);
+        }
+      } catch (initialError) {
+        console.error('Failed to initialize the Orders page:', initialError);
+        if (!cancelled) {
+          setError(true);
+          setLoading(false);
+        }
+      }
+    };
+
+    initialize();
+    return () => {
+      cancelled = true;
+      requestIdRef.current += 1;
+    };
+  }, [activeCafe?.id, fetchOrders, loadSelectedDay, loadSettings, updateDateUrl]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const day = new URLSearchParams(window.location.search).get('date');
+      if (!isValidBusinessDay(day) || day === selectedDayRef.current) return;
+      setSelectedDay(day);
+      selectedDayRef.current = day;
+      setDayData(null);
+      setLoading(true);
+      setSelectedOrder(null);
+      loadSelectedDay(day);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [loadSelectedDay]);
+
+  const loadUnclosedOrders = useCallback(async () => {
+    if (!activeCafe?.id) return;
     setEarlierOrdersError(false);
-    const { data, error: queryError } = await supabase
-      .from('orders')
-      .select('id, table_name, status, created_at')
-      .eq('cafe_id', activeCafe.id)
-      .in('status', ['open', 'served'])
-      .lt('created_at', from)
-      .order('created_at', { ascending: true });
+    const parameters = { p_cafe: activeCafe.id };
+    const { data, error: queryError } = await supabase.rpc('admin_unclosed_orders', parameters);
+    recordDiagnostic('unclosed', "supabase.rpc('admin_unclosed_orders', { p_cafe })", parameters, data, queryError);
     if (queryError) {
       console.error('Failed to load unclosed earlier orders:', queryError);
+      setEarlierOrders([]);
       setEarlierOrdersError(true);
       return;
     }
-    setEarlierOrders(Array.isArray(data) ? data : []);
-  }, [activeCafe?.id]);
+    try {
+      setEarlierOrders(unclosedOrdersResponse(data));
+      setEarlierOrdersError(false);
+    } catch (responseError) {
+      console.error('Invalid unclosed earlier orders response:', responseError);
+      recordDiagnostic('unclosed', "supabase.rpc('admin_unclosed_orders', { p_cafe })", parameters, data, responseError);
+      setEarlierOrders([]);
+      setEarlierOrdersError(true);
+    }
+  }, [activeCafe?.id, recordDiagnostic]);
 
   useEffect(() => {
-    if (activeCafe?.id && dayData?.from) loadUnclosedOrders(dayData.from);
-  }, [activeCafe?.id, dayData?.from, loadUnclosedOrders]);
+    if (activeCafe?.id) loadUnclosedOrders();
+  }, [activeCafe?.id, loadUnclosedOrders]);
 
   useEffect(() => {
     if (!activeCafe?.id) return undefined;
     const cafeId = activeCafe.id;
+    const checkServerBusinessDay = async () => {
+      try {
+        const previousToday = latestTodayRef.current;
+        const wasViewingToday = Boolean(previousToday) && selectedDayRef.current === previousToday;
+        const today = await fetchOrders(null);
+        if (today.day !== previousToday) {
+          latestTodayRef.current = today.day;
+          setTodayDay(today.day);
+        }
+        if (wasViewingToday) {
+          requestIdRef.current += 1;
+          setDayData(today);
+          setSelectedDay(today.day);
+          selectedDayRef.current = today.day;
+          setSelectedOrder((current) => current
+            ? today.orders.find((order) => order.id === current.id) || null
+            : null);
+          setError(false);
+          setLoading(false);
+          updateDateUrl(today.day, true);
+        }
+        if (today.day !== previousToday && previousToday) {
+          showToast(t('admin.ordersPage.newDayToast'), 'success');
+        }
+      } catch (rolloverError) {
+        console.error('Failed to check the current business day:', rolloverError);
+      }
+    };
+    const refreshCurrent = () => {
+      const currentDay = selectedDayRef.current;
+      const refreshingToday = currentDay && currentDay === latestTodayRef.current;
+      const refresh = refreshingToday
+        ? Promise.all([checkServerBusinessDay(), loadUnclosedOrders()])
+        : Promise.all([
+          currentDay ? loadSelectedDay(currentDay, true) : Promise.resolve(),
+          loadUnclosedOrders(),
+          checkServerBusinessDay(),
+        ]);
+      return refresh;
+    };
     const scheduleRefetch = () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => loadSelectedDay(dayOffset, true), 2000);
+      debounceRef.current = setTimeout(refreshCurrent, 2000);
     };
     const channel = supabase
       .channel(`admin-orders-${cafeId}`)
@@ -208,40 +432,38 @@ export default function AdminOrdersPage() {
         filter: `cafe_id=eq.${cafeId}`,
       }, scheduleRefetch)
       .subscribe();
-    const refreshInterval = setInterval(() => loadSelectedDay(dayOffset, true), 30000);
+    const settingsChannel = supabase
+      .channel(`admin-orders-settings-${cafeId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'cafes',
+        filter: `id=eq.${cafeId}`,
+      }, () => {
+        loadSettings()
+          .then(() => refreshCurrent())
+          .catch((settingsLoadError) => console.error('Failed to refresh cafe settings:', settingsLoadError));
+      })
+      .subscribe();
+    const refreshInterval = setInterval(refreshCurrent, 30000);
     const handleVisibility = () => {
       if (document.visibilityState !== 'visible') return;
-      if (dayOffset === 0 && dayData?.to && Date.now() >= new Date(dayData.to).getTime()) {
-        const boundary = String(dayData.to);
-        if (boundaryHandledRef.current !== boundary) {
-          boundaryHandledRef.current = boundary;
-          loadSelectedDay(0, true).then(() => showToast(isAmharic ? 'አዲስ ቀን ተጀምሯል።' : 'A new day has started.', 'success'));
-          return;
-        }
-      }
-      loadSelectedDay(dayOffset, true);
+      refreshCurrent();
     };
     document.addEventListener('visibilitychange', handleVisibility);
+    const boundaryTimer = selectedDay === todayDay && dayData?.to
+      ? setTimeout(checkServerBusinessDay, Math.max(0, new Date(dayData.to).getTime() - Date.now() + 50))
+      : null;
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       clearInterval(refreshInterval);
+      if (boundaryTimer) clearTimeout(boundaryTimer);
       document.removeEventListener('visibilitychange', handleVisibility);
       supabase.removeChannel(channel);
+      supabase.removeChannel(settingsChannel);
     };
-  }, [activeCafe?.id, dayOffset, dayData?.to, isAmharic, loadSelectedDay, showToast]);
-
-  useEffect(() => {
-    if (dayOffset !== 0 || !dayData?.to) return undefined;
-    const boundary = String(dayData.to);
-    const delay = Math.max(0, new Date(dayData.to).getTime() - Date.now() + 50);
-    const timer = setTimeout(() => {
-      if (boundaryHandledRef.current === boundary) return;
-      boundaryHandledRef.current = boundary;
-      loadSelectedDay(0, true).then(() => showToast(isAmharic ? 'አዲስ ቀን ተጀምሯል።' : 'A new day has started.', 'success'));
-    }, delay);
-    return () => clearTimeout(timer);
-  }, [dayOffset, dayData?.to, isAmharic, loadSelectedDay, showToast]);
+  }, [activeCafe?.id, dayData?.to, fetchOrders, loadSelectedDay, loadSettings, loadUnclosedOrders, selectedDay, showToast, t, todayDay, updateDateUrl]);
 
   const orders = dayData?.orders || [];
   const orderedForNumbers = useMemo(
@@ -296,7 +518,8 @@ export default function AdminOrdersPage() {
     const orderCount = orders.length;
     const paidOrders = orders.filter((order) => order.status === 'paid');
     const openOrders = orders.filter((order) => order.status === 'open' || order.status === 'served');
-    const totalValue = orders.reduce((sum, order) => sum + Number(order.total || 0), 0);
+    const billableOrders = orders.filter((order) => order.status !== 'cancelled');
+    const totalValue = billableOrders.reduce((sum, order) => sum + Number(order.total || 0), 0);
     const averageMinutes = (field) => {
       const elapsed = orders
         .filter((order) => order.created_at && order[field])
@@ -304,19 +527,20 @@ export default function AdminOrdersPage() {
         .filter((value) => Number.isFinite(value) && value >= 0);
       return elapsed.length ? elapsed.reduce((sum, value) => sum + value, 0) / elapsed.length / 60000 : null;
     };
-    const hourly = Array(24).fill(0);
     const fromMs = new Date(dayData?.from || 0).getTime();
+    const toMs = new Date(dayData?.to || 0).getTime();
+    const hourly = Array(Math.max(0, Math.ceil((toMs - fromMs) / 3600000))).fill(0);
     orders.forEach((order) => {
       const hour = Math.floor((new Date(order.created_at).getTime() - fromMs) / 3600000);
-      if (hour >= 0 && hour < 24) hourly[hour] += 1;
+      if (hour >= 0 && hour < hourly.length) hourly[hour] += 1;
     });
     const busiestHour = hourly.reduce((best, count, index) => count > hourly[best] ? index : best, 0);
-    const busiestHourLabel = new Intl.DateTimeFormat(lang === 'am' ? 'am-ET' : 'en-GB', {
+    const busiestHourLabel = hourly.length ? new Intl.DateTimeFormat(lang === 'am' ? 'am-ET' : 'en-GB', {
       hour: 'numeric',
       timeZone: activeCafe?.settings?.timezone || 'Africa/Addis_Ababa',
-    }).format(new Date(fromMs + busiestHour * 3600000));
+    }).format(new Date(fromMs + busiestHour * 3600000)) : '—';
     const items = new Map();
-    orders.forEach((order) => (order.items || []).forEach((item) => {
+    billableOrders.forEach((order) => (order.items || []).forEach((item) => {
       const name = getItemName(item.name);
       const previous = items.get(name) || { name, quantity: 0, revenue: 0 };
       const quantity = Number(item.qty || 0);
@@ -331,28 +555,30 @@ export default function AdminOrdersPage() {
       paidSales: paidOrders.reduce((sum, order) => sum + Number(order.total || 0), 0),
       unpaid: openOrders.reduce((sum, order) => sum + Number(order.total || 0), 0),
       cancelled: orders.filter((order) => order.status === 'cancelled').length,
-      average: orderCount ? totalValue / orderCount : 0,
+      average: billableOrders.length ? totalValue / billableOrders.length : 0,
       acceptedMinutes: averageMinutes('accepted_at'),
       readyMinutes: averageMinutes('ready_at'),
       busiestHour: busiestHourLabel,
       hourly,
-      itemCount: orders.reduce((sum, order) => sum + Number(order.item_count || 0), 0),
+      itemCount: billableOrders.reduce((sum, order) => sum + Number(order.item_count || 0), 0),
       topItems: [...items.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 10),
     };
-  }, [orders, dayData?.from, getItemName, activeCafe?.settings?.timezone, lang]);
+  }, [orders, dayData?.from, dayData?.to, getItemName, activeCafe?.settings?.timezone, lang]);
 
-  const changeDay = (offset) => {
-    if (offset > 0 || offset < -365) return;
-    setDayOffset(offset);
+  const changeDay = (day) => {
+    if (!isValidBusinessDay(day) || !todayDay || day > todayDay || day < shiftBusinessDay(todayDay, -365)) return;
+    setSelectedDay(day);
+    selectedDayRef.current = day;
+    setDayData(null);
     setSelectedOrder(null);
-    loadSelectedDay(offset);
+    setLoading(true);
+    setError(false);
+    updateDateUrl(day);
+    loadSelectedDay(day);
   };
 
   const handleDateChange = (event) => {
-    const selectedDay = event.target.value;
-    if (!selectedDay || !todayDay || selectedDay > todayDay) return;
-    const offset = offsetForDay(selectedDay, todayDay);
-    if (offset <= 0 && offset >= -365) changeDay(offset);
+    if (isValidBusinessDay(event.target.value)) changeDay(event.target.value);
   };
 
   const closeEarlierOrder = async (order, status) => {
@@ -379,8 +605,8 @@ export default function AdminOrdersPage() {
       if (updateError) throw updateError;
       if (!data) throw new Error('The order could not be updated. It may already have been closed.');
       showToast(t(status === 'paid' ? 'admin.ordersPage.markedPaid' : 'admin.ordersPage.markedCancelled'), 'success');
-      await loadUnclosedOrders(dayData?.from);
-      await loadSelectedDay(dayOffset, true);
+      await loadUnclosedOrders();
+      if (selectedDayRef.current) await loadSelectedDay(selectedDayRef.current, true);
     } catch (closeError) {
       console.error('Failed to close an earlier order:', closeError);
       showToast(t('admin.ordersPage.networkError'), 'error');
@@ -400,16 +626,16 @@ export default function AdminOrdersPage() {
       orderNumbers.get(order.id),
       order.table_name,
       order.status,
-      order.created_at,
+      formatDateTime(order.created_at, timezone, lang),
       (order.items || []).map((item) => `${getItemName(item.name)} x${item.qty} (${item.note || ''})`).join('; '),
       order.total,
       order.accepted_by_name,
-      order.accepted_at,
-      order.ready_at,
-      order.served_at,
-      order.paid_at,
+      formatDateTime(order.accepted_at, timezone, lang),
+      formatDateTime(order.ready_at, timezone, lang),
+      formatDateTime(order.served_at, timezone, lang),
+      formatDateTime(order.paid_at, timezone, lang),
       order.note,
-      order.edited_at,
+      formatDateTime(order.edited_at, timezone, lang),
       order.edited_by,
       order.edit_count,
       order.cancelled_by,
@@ -475,12 +701,40 @@ export default function AdminOrdersPage() {
           <div className="orders-error" role="alert">{authError}</div>
         ) : (
           <>
+            {debugEnabled && (
+              <details className="orders-diagnostics">
+                <summary>{t('admin.ordersPage.diagnosticsTitle')}</summary>
+                {settingsError && <p className="diagnostic-error">{t('admin.ordersPage.settingsLoadError')}: {settingsError}</p>}
+                {['orders', 'unclosed', 'settings'].map((name) => {
+                  const entry = diagnostics[name];
+                  return (
+                    <section key={name}>
+                      <h2>{t(`admin.ordersPage.diagnosticNames.${name}`)}</h2>
+                      {entry ? (
+                        <>
+                          <p><strong>{t('admin.ordersPage.diagnosticCall')}:</strong> <code>{entry.call}</code></p>
+                          <p><strong>{t('admin.ordersPage.diagnosticParameters')}:</strong></p>
+                          <pre>{JSON.stringify(entry.parameters, null, 2)}</pre>
+                          <p><strong>{t('admin.ordersPage.diagnosticResponse')}:</strong></p>
+                          <pre>{JSON.stringify(entry.data, null, 2)}</pre>
+                          <p><strong>{t('admin.ordersPage.diagnosticError')}:</strong></p>
+                          <pre className={entry.error ? 'diagnostic-error' : ''}>{entry.error || t('admin.ordersPage.noDiagnosticError')}</pre>
+                          {migrationHint(name, entry.error) && (
+                            <p className="diagnostic-error">{t(migrationHint(name, entry.error))}</p>
+                          )}
+                        </>
+                      ) : <p>{t('admin.ordersPage.diagnosticsWaiting')}</p>}
+                    </section>
+                  );
+                })}
+              </details>
+            )}
             <header className="orders-header">
               <div>
                 <h1>{t('admin.ordersPage.title')}</h1>
                 <p className="orders-day-label">
                   {dayLabel}
-                  {dayOffset === 0 && <span className="live-indicator"><i />{t('admin.ordersPage.live')}</span>}
+                  {selectedDay && selectedDay === todayDay && <span className="live-indicator"><i />{t('admin.ordersPage.live')}</span>}
                 </p>
               </div>
               <div className="orders-actions">
@@ -494,10 +748,10 @@ export default function AdminOrdersPage() {
             </header>
 
             <section className="day-controls" aria-label={t('admin.ordersPage.dayControls')}>
-              <Button variant="secondary" onClick={() => changeDay(dayOffset - 1)} disabled={dayOffset <= -365} icon={<ChevronLeft size={17} />}>
+              <Button variant="secondary" onClick={() => changeDay(shiftBusinessDay(selectedDay, -1))} disabled={!selectedDay || selectedDay <= shiftBusinessDay(todayDay, -365)} icon={<ChevronLeft size={17} />}>
                 {t('admin.ordersPage.previousDay')}
               </Button>
-              <Button variant="secondary" onClick={() => changeDay(dayOffset + 1)} disabled={dayOffset >= 0} icon={<ChevronRight size={17} />}>
+              <Button variant="secondary" onClick={() => changeDay(shiftBusinessDay(selectedDay, 1))} disabled={!selectedDay || selectedDay >= todayDay} icon={<ChevronRight size={17} />}>
                 {t('admin.ordersPage.nextDay')}
               </Button>
               <label className="date-picker">
@@ -505,13 +759,14 @@ export default function AdminOrdersPage() {
                 <input
                   type="date"
                   aria-label={t('admin.ordersPage.chooseDate')}
-                  value={dayData?.day || ''}
-                  min={todayDay ? new Date(Date.parse(`${todayDay}T00:00:00Z`) - 365 * 86400000).toISOString().slice(0, 10) : undefined}
+                  value={selectedDay}
+                  min={todayDay ? shiftBusinessDay(todayDay, -365) : undefined}
                   max={todayDay || undefined}
+                  disabled={!todayDay}
                   onChange={handleDateChange}
                 />
               </label>
-              <Button variant="outline" onClick={() => changeDay(0)} disabled={dayOffset === 0}>
+              <Button variant="outline" onClick={() => changeDay(todayDay)} disabled={!todayDay || selectedDay === todayDay}>
                 {t('admin.ordersPage.backToToday')}
               </Button>
             </section>
@@ -519,7 +774,8 @@ export default function AdminOrdersPage() {
             {earlierOrdersError && (
               <div className="orders-error" role="alert">
                 <span>{t('admin.ordersPage.networkError')}</span>
-                <Button variant="secondary" onClick={() => loadUnclosedOrders(dayData?.from)}>{t('common.retry')}</Button>
+                {migrationHint('unclosed', diagnostics.unclosed?.error) && <span>{t(migrationHint('unclosed', diagnostics.unclosed?.error))}</span>}
+                <Button variant="secondary" onClick={loadUnclosedOrders}>{t('common.retry')}</Button>
               </div>
             )}
             {earlierOrders.length > 0 && (
@@ -569,8 +825,11 @@ export default function AdminOrdersPage() {
               </section>
             ) : error ? (
               <div className="orders-error" role="alert">
-                <span>{t('admin.ordersPage.networkError')}</span>
-                <Button variant="secondary" onClick={() => loadSelectedDay(dayOffset)}>{t('common.retry')}</Button>
+                <span>{error === 'future_date' ? t('admin.ordersPage.futureDateError')
+                  : error === 'date_too_old' ? t('admin.ordersPage.oldDateError')
+                    : t('admin.ordersPage.networkError')}</span>
+                {migrationHint('orders', diagnostics.orders?.error) && <span>{t(migrationHint('orders', diagnostics.orders?.error))}</span>}
+                <Button variant="secondary" onClick={retryOrders}>{t('common.retry')}</Button>
               </div>
             ) : dayData ? (
               <>
@@ -718,7 +977,8 @@ export default function AdminOrdersPage() {
                       ['served', selectedOrder.served_at, null],
                       ['paid', selectedOrder.paid_at, null],
                     ].map(([key, at, by], index, steps) => {
-                      const previousAt = selectedOrder.created_at;
+                      const previousStep = steps.slice(0, index).reverse().find(([, timestamp]) => timestamp);
+                      const previousAt = previousStep ? previousStep[1] : null;
                       return (
                         <li className={at ? 'complete' : 'pending'} key={key}>
                           <span className="timeline-dot" />
@@ -729,15 +989,15 @@ export default function AdminOrdersPage() {
                       );
                     })}
                   </ol>
-                  {selectedOrder.paid_at && <p className="total-duration"><strong>{t('admin.ordersPage.totalTime')}:</strong> {durationBetween(selectedOrder.created_at, selectedOrder.paid_at)}</p>}
+                  {(selectedOrder.paid_at || selectedOrder.closed_at) && <p className="total-duration"><strong>{t('admin.ordersPage.totalTime')}:</strong> {durationBetween(selectedOrder.created_at, selectedOrder.paid_at || selectedOrder.closed_at)}</p>}
                 </section>
 
-                {(selectedOrder.edited_at || selectedOrder.cancelled_by) && (
+                {(selectedOrder.edited_at || selectedOrder.edit_count || selectedOrder.cancelled_by) && (
                   <section className="audit-details">
-                    {selectedOrder.edited_at && <p>{t('admin.ordersPage.editedDetails', {
+                    {(selectedOrder.edited_at || selectedOrder.edit_count) && <p>{t('admin.ordersPage.editedDetails', {
                       count: selectedOrder.edit_count || 1,
                       editor: selectedOrder.edited_by || t('admin.ordersPage.unknown'),
-                      time: formatDateTime(selectedOrder.edited_at, timezone, lang),
+                      time: formatDateTime(selectedOrder.edited_at, timezone, lang) || '—',
                     })}</p>}
                     {selectedOrder.cancelled_by && <p>{t('admin.ordersPage.cancelledDetails', {
                       actor: selectedOrder.cancelled_by === 'customer' ? t('admin.ordersPage.customer') : t('admin.ordersPage.staff'),
@@ -753,6 +1013,13 @@ export default function AdminOrdersPage() {
 
       <style jsx>{`
         .admin-orders-page { max-width: 1440px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+        .orders-diagnostics { padding: 14px; background: var(--color-foam); border: 1px solid var(--color-line); border-radius: var(--radius-card); overflow: hidden; }
+        .orders-diagnostics summary { cursor: pointer; font-weight: 700; }
+        .orders-diagnostics section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--color-line); }
+        .orders-diagnostics h2 { margin: 0 0 8px; font-size: 15px; }
+        .orders-diagnostics p { overflow-wrap: anywhere; }
+            .orders-diagnostics pre { max-height: 240px; overflow: auto; padding: 10px; background: var(--color-cream); border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+        .diagnostic-error { color: var(--color-terracotta); }
         .orders-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
         .orders-header h1 { margin: 0; font-size: 30px; }
         .orders-day-label { margin-top: 6px; color: var(--color-muted); display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }

@@ -281,6 +281,23 @@
       "staff": "ሰራተኛ",
       "unknown": "ያልታወቀ",
       "noReason": "ምክንያት አልተገለጸም",
+      "futureDateError": "ይህ የስራ ቀን ወደፊት ነው። ዛሬን ወይም ከዛሬ በፊት ያለ ቀን ይምረጡ።",
+      "oldDateError": "ይህ የስራ ቀን ከ365 ቀናት በላይ ያለፈ ነው። ቅርብ የሆነ ቀን ይምረጡ።",
+      "ordersMigrationHint": "በSupabase ውስጥ step5_orders_date_fix.sql ያስኪዱ። ከዚህ በፊት step3_order_changes.sql እና step4_admin_orders.sql መስራት አለባቸው።",
+      "unclosedMigrationHint": "በSupabase ውስጥ step4_admin_orders.sql ያስኪዱ፤ ይህ step3_order_changes.sql ይፈልጋል።",
+      "diagnosticsTitle": "የትዕዛዝ ምርመራ (?debug=1)",
+      "settingsLoadError": "ቅንብሮችን መጫን አልተቻለም",
+      "diagnosticNames": {
+        "orders": "admin_orders_on",
+        "unclosed": "admin_unclosed_orders",
+        "settings": "የካፌ ቅንብሮች መጫን"
+      },
+      "diagnosticCall": "ጥሪ",
+      "diagnosticParameters": "መለኪያዎች",
+      "diagnosticResponse": "ጥሬ ምላሽ",
+      "diagnosticError": "ስህተት",
+      "noDiagnosticError": "የለም",
+      "diagnosticsWaiting": "እስካሁን ምንም ጥሪ አልተመዘገበም።",
       "dailyReport": "የቀኑ የትዕዛዝ ሪፖርት"
     },
     "settings": {

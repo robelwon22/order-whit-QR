@@ -281,6 +281,23 @@
       "staff": "staff",
       "unknown": "unknown",
       "noReason": "No reason provided",
+      "futureDateError": "That business day is in the future. Choose today or an earlier date.",
+      "oldDateError": "That business day is more than 365 days old. Choose a more recent date.",
+      "ordersMigrationHint": "Run step5_orders_date_fix.sql in Supabase. It depends on step3_order_changes.sql and step4_admin_orders.sql.",
+      "unclosedMigrationHint": "Run step4_admin_orders.sql in Supabase; it depends on step3_order_changes.sql.",
+      "diagnosticsTitle": "Order diagnostics (?debug=1)",
+      "settingsLoadError": "Settings could not be loaded",
+      "diagnosticNames": {
+        "orders": "admin_orders_on",
+        "unclosed": "admin_unclosed_orders",
+        "settings": "Cafe settings load"
+      },
+      "diagnosticCall": "Call",
+      "diagnosticParameters": "Parameters",
+      "diagnosticResponse": "Raw response",
+      "diagnosticError": "Error",
+      "noDiagnosticError": "None",
+      "diagnosticsWaiting": "No call recorded yet.",
       "dailyReport": "Daily orders report"
     },
     "settings": {
