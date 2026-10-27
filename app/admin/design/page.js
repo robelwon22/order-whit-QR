@@ -18,6 +18,8 @@ import {
   getDerivedButtonTextColor,
   getDerivedCardStyle,
   autoFixBrandColor,
+  mergeCafeTheme,
+  deriveDarkPalette,
   resizeImageIfNeeded,
 } from '../../../lib/theme';
 import {
@@ -59,10 +61,20 @@ export default function AdminDesignPage() {
   const [initialBrandColor, setInitialBrandColor] = useState(DEFAULT_THEME.primary);
   const [initialBgColor, setInitialBgColor] = useState(DEFAULT_THEME.background);
   const [initialLogoUrl, setInitialLogoUrl] = useState(null);
+  const [initialDarkLogoUrl, setInitialDarkLogoUrl] = useState(null);
 
   const [brandColor, setBrandColor] = useState(DEFAULT_THEME.primary);
   const [bgColor, setBgColor] = useState(DEFAULT_THEME.background);
   const [logoUrl, setLogoUrl] = useState(null);
+  const [darkLogoUrl, setDarkLogoUrl] = useState(null);
+  const [darkEnabled, setDarkEnabled] = useState(true);
+  const [darkMode, setDarkMode] = useState('auto');
+  const [defaultMode, setDefaultMode] = useState('system');
+  const [darkBackground, setDarkBackground] = useState('#1A120C');
+  const [darkText, setDarkText] = useState('#F3EADF');
+  const [darkPrimary, setDarkPrimary] = useState('#D9A066');
+  const [darkButton, setDarkButton] = useState('#D9A066');
+  const [previewMode, setPreviewMode] = useState('light');
 
   // Hex input strings for typing
   const [brandInput, setBrandInput] = useState(DEFAULT_THEME.primary);
@@ -74,9 +86,11 @@ export default function AdminDesignPage() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
+  const darkLogoInputRef = useRef(null);
 
   // Tracking deleted files to remove on save
   const [oldLogosToDelete, setOldLogosToDelete] = useState([]);
+  const [oldDarkLogosToDelete, setOldDarkLogosToDelete] = useState([]);
 
   // Saving state
   const [saving, setSaving] = useState(false);
@@ -89,7 +103,8 @@ export default function AdminDesignPage() {
   useEffect(() => {
     if (!activeCafe) return;
 
-    const theme = activeCafe.theme || {};
+    const theme = mergeCafeTheme(activeCafe.theme || {});
+    const darkPalette = theme.dark.mode === 'custom' ? theme.dark : deriveDarkPalette(theme);
     const bColor = theme.primary || theme.button || DEFAULT_THEME.primary;
     const bg = theme.background || DEFAULT_THEME.background;
     const logo = activeCafe.logo_url || null;
@@ -97,15 +112,26 @@ export default function AdminDesignPage() {
     setInitialBrandColor(bColor);
     setInitialBgColor(bg);
     setInitialLogoUrl(logo);
+    setInitialDarkLogoUrl(theme.dark.logo_url || null);
 
     setBrandColor(bColor);
     setBgColor(bg);
     setLogoUrl(logo);
+    setDarkLogoUrl(theme.dark.logo_url || null);
+    setDarkEnabled(theme.dark.enabled);
+    setDarkMode(theme.dark.mode);
+    setDefaultMode(theme.default_mode);
+    setDarkBackground(darkPalette.background);
+    setDarkText(darkPalette.text);
+    setDarkPrimary(darkPalette.primary);
+    setDarkButton(darkPalette.button);
+    setPreviewMode('light');
 
     setBrandInput(bColor);
     setBgInput(bg);
     setColorError('');
     setOldLogosToDelete([]);
+    setOldDarkLogosToDelete([]);
   }, [activeCafe?.id, activeCafe?.updated_at]);
 
   // Load cafe categories & items for preview
@@ -152,6 +178,13 @@ export default function AdminDesignPage() {
   const derivedTextColor = useMemo(() => getDerivedTextColor(bgColor), [bgColor]);
   const derivedBtnTextColor = useMemo(() => getDerivedButtonTextColor(brandColor), [brandColor]);
   const cardStyle = useMemo(() => getDerivedCardStyle(bgColor), [bgColor]);
+  const autoDarkPalette = useMemo(
+    () => deriveDarkPalette({ primary: brandColor, button: brandColor, background: bgColor }),
+    [brandColor, bgColor]
+  );
+  const effectiveDarkPalette = darkMode === 'custom'
+    ? { ...autoDarkPalette, background: darkBackground, text: darkText, primary: darkPrimary, button: darkButton }
+    : autoDarkPalette;
 
   // Contrast ratios
   const textBgContrast = useMemo(() => getContrastRatio(derivedTextColor, bgColor), [derivedTextColor, bgColor]);
@@ -159,17 +192,31 @@ export default function AdminDesignPage() {
   const btnContrast = useMemo(() => getContrastRatio(derivedBtnTextColor, brandColor), [derivedBtnTextColor, brandColor]);
 
   // The critical contrast between brand color and background
-  const lowestContrast = Math.min(brandBgContrast, textBgContrast);
+  const darkButtonText = getDerivedButtonTextColor(effectiveDarkPalette.button);
+  const darkButtonContrast = getContrastRatio(darkButtonText, effectiveDarkPalette.button);
+  const darkButtonVisibility = getContrastRatio(effectiveDarkPalette.button, effectiveDarkPalette.background);
+  const lightButtonVisibility = getContrastRatio(brandColor, bgColor);
+  const lowestContrast = Math.min(brandBgContrast, textBgContrast, darkButtonContrast, darkButtonVisibility, lightButtonVisibility);
   const showContrastWarning = lowestContrast < 4.5;
-  const isSaveBlocked = lowestContrast < 3.0;
+  const isSaveBlocked = lightButtonVisibility < 3 || darkButtonVisibility < 3;
 
   // Dirty state tracking
   const isDirty = useMemo(() => {
     const brandChanged = normalizeHex(brandColor) !== normalizeHex(initialBrandColor);
     const bgChanged = normalizeHex(bgColor) !== normalizeHex(initialBgColor);
     const logoChanged = logoUrl !== initialLogoUrl;
-    return brandChanged || bgChanged || logoChanged;
-  }, [brandColor, bgColor, logoUrl, initialBrandColor, initialBgColor, initialLogoUrl]);
+    const darkLogoChanged = darkLogoUrl !== initialDarkLogoUrl;
+    const darkSettingsChanged = darkEnabled !== (activeCafe?.theme?.dark?.enabled !== false)
+      || darkMode !== (activeCafe?.theme?.dark?.mode === 'custom' ? 'custom' : 'auto')
+      || defaultMode !== (activeCafe?.theme?.default_mode || 'system')
+      || (darkMode === 'custom' && (
+        darkBackground !== activeCafe?.theme?.dark?.background
+        || darkText !== activeCafe?.theme?.dark?.text
+        || darkPrimary !== activeCafe?.theme?.dark?.primary
+        || darkButton !== activeCafe?.theme?.dark?.button
+      ));
+    return brandChanged || bgChanged || logoChanged || darkLogoChanged || darkSettingsChanged;
+  }, [brandColor, bgColor, logoUrl, darkLogoUrl, darkEnabled, darkMode, defaultMode, darkBackground, darkText, darkPrimary, darkButton, initialBrandColor, initialBgColor, initialLogoUrl, initialDarkLogoUrl, activeCafe]);
 
   // Warn before leaving with unsaved changes
   useEffect(() => {
@@ -558,7 +605,17 @@ export default function AdminDesignPage() {
         ];
 
   // Live Preview Component (Rendered on desktop side & mobile modal)
-  const renderLivePreviewContent = () => (
+  const renderLivePreviewContent = () => {
+    const previewColors = previewMode === 'dark' ? effectiveDarkPalette : null;
+    const bgColor = previewColors?.background || bgColor;
+    const brandColor = previewColors?.primary || brandColor;
+    const derivedTextColor = previewColors?.text || derivedTextColor;
+    const derivedBtnTextColor = getDerivedButtonTextColor(previewColors?.button || brandColor);
+    const cardStyle = previewColors
+      ? { cardBg: previewColors.surface || '#251A12', cardBorder: previewColors.border || '#3A2B20', mutedText: previewColors.muted || '#B7A593' }
+      : getDerivedCardStyle(bgColor);
+    const previewLogoUrl = previewMode === 'dark' ? (darkLogoUrl || logoUrl) : logoUrl;
+    return (
     <div
       style={{
         width: '100%',
@@ -634,7 +691,7 @@ export default function AdminDesignPage() {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <CafeLogo
-              logoUrl={logoUrl}
+              logoUrl={previewLogoUrl}
               name={activeCafe.name}
               brandColor={brandColor}
               size={52}
@@ -875,6 +932,7 @@ export default function AdminDesignPage() {
       </div>
     </div>
   );
+};
 
   return (
     <AppShell

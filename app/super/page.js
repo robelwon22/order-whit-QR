@@ -14,6 +14,7 @@ import { Modal } from '../../components/ui/Modal';
 import { BottomSheet } from '../../components/ui/BottomSheet';
 import { Badge, EmptyState, Skeleton, ConfirmDialog } from '../../components/ui/Badge';
 import { LanguageSwitcher } from '../../components/ui/LanguageSwitcher';
+import { ThemeToggle } from '../../components/ui/ThemeToggle';
 import {
   ShieldCheck,
   Plus,
@@ -421,6 +422,7 @@ export default function SuperAdminPage() {
           >
             New Cafe
           </Button>
+          <ThemeToggle compact />
           <LanguageSwitcher size="sm" />
           <IconButton icon={<LogOut size={16} />} onClick={logout} title="Log out" variant="ghost" />
         </div>

@@ -6,11 +6,12 @@ import { supabase, pick } from '../../lib/supabase';
 import { useI18n } from '../../lib/i18n';
 import { Logo, CoffeeIllustration } from '../../components/ui/Logo';
 import { CafeLogo } from '../../components/ui/CafeLogo';
-import { getDerivedTextColor, getDerivedButtonTextColor, getDerivedCardStyle } from '../../lib/theme';
+import { getDerivedTextColor, getDerivedButtonTextColor, getDerivedCardStyle, mergeCafeTheme, deriveDarkPalette, autoFixBrandColor, getContrastRatio } from '../../lib/theme';
 import { Button, IconButton } from '../../components/ui/Button';
 import { BottomSheet } from '../../components/ui/BottomSheet';
 import { QtyStepper, Badge, EmptyState, Skeleton } from '../../components/ui/Badge';
 import { LanguageSwitcher } from '../../components/ui/LanguageSwitcher';
+import { ThemeToggle, useTheme } from '../../components/ui/ThemeToggle';
 import {
   Search,
   ShoppingBag,
@@ -80,6 +81,29 @@ export function getDeviceKey(cafeSlug) {
           : Math.random().toString(36).substring(2) + Date.now().toString(36);
       localStorage.setItem(keyName, key);
     }
+
+    function createSessionId() {
+      return typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    }
+
+    function getScanSessionKey(cafeSlug, tableToken) {
+      return `session:${cafeSlug}:${tableToken}`;
+    }
+
+    function getSessionCartKey(id) {
+      return `cart:${id}`;
+    }
+
+    function CustomerThemeSync({ isDark, background }) {
+      useEffect(() => {
+        document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', background || (isDark ? '#1A120C' : '#F7F1E8'));
+      }, [isDark, background]);
+      return null;
+    }
     return key;
   } catch {
     return '';
@@ -109,6 +133,16 @@ export function mapOrderError(err, isAmharic = false) {
     return isAmharic
       ? 'አንዳንድ እቃዎች በአሁኑ ወቅት አይገኙም። እባክዎ ትዕዛዝዎን ይመልከቱ።'
       : 'An item is no longer available. Please check your order.';
+  }
+  if (code.includes('too_many_orders')) {
+    return isAmharic
+      ? 'በጠረጴዛው ላይ ብዙ ትዕዛዞች አሉ። እባክዎ ሰራተኞቹን ይጠይቁ።'
+      : 'There are already several open orders at this table. Please ask the staff for help.';
+  }
+  if (code.includes('table_inactive')) {
+    return isAmharic
+      ? 'ይህ ጠረጴዛ አሁን አይሰራም። እባክዎ ሰራተኞቹን ይጠይቁ።'
+      : 'This table is not active. Please ask the staff.';
   }
   if (code.includes('invalid_quantity') || code.includes('invalid_items')) {
     return isAmharic
@@ -249,6 +283,7 @@ export default function CustomerMenuPage() {
   const { slug } = useParams();
   const searchParams = useSearchParams();
   const { lang, setLang, t, isAmharic } = useI18n();
+  const { choice: themeChoice, systemDark } = useTheme();
 
   // Data State
   const [cafe, setCafe] = useState(null);
@@ -273,12 +308,18 @@ export default function CustomerMenuPage() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [missing, setMissing] = useState(false);
+  const [cafeUnavailable, setCafeUnavailable] = useState(false);
 
   // Table & Ordering Mode State
   const [table, setTable] = useState(null); // { token, name }
   const [tableError, setTableError] = useState('');
   const [showWelcome, setShowWelcome] = useState(false);
   const [welcomeFading, setWelcomeFading] = useState(false);
+  const [welcomeBack, setWelcomeBack] = useState(null);
+  const [scanNotice, setScanNotice] = useState('');
+  const [sessionId, setSessionId] = useState('');
+  const [lastOrderItems, setLastOrderItems] = useState([]);
+  const [lastOrderAt, setLastOrderAt] = useState(0);
 
   // UI State
   const [activeCategory, setActiveCategory] = useState('all');
@@ -327,6 +368,33 @@ export default function CustomerMenuPage() {
   // Read URL table token
   const urlToken = searchParams.get('t') || searchParams.get('table');
 
+  const touchSession = useCallback(() => {
+    if (!sessionId || !slug || !table?.token) return;
+    try {
+      const key = getScanSessionKey(slug, table.token);
+      const current = JSON.parse(localStorage.getItem(key) || 'null');
+      if (current?.id !== sessionId) return;
+      const updated = { ...current, lastActiveAt: new Date().toISOString() };
+      localStorage.setItem(key, JSON.stringify(updated));
+    } catch (error) {
+      console.warn('Could not update order session activity:', error);
+    }
+  }, [sessionId, slug, table?.token]);
+
+  useEffect(() => {
+    if (!sessionId || !table?.token) return;
+    try {
+      localStorage.setItem(getSessionCartKey(sessionId), JSON.stringify(cart));
+      const key = getScanSessionKey(slug, table.token);
+      const current = JSON.parse(localStorage.getItem(key) || 'null');
+      if (current?.id === sessionId) {
+        localStorage.setItem(key, JSON.stringify({ ...current, lastActiveAt: new Date().toISOString() }));
+      }
+    } catch (error) {
+      console.warn('Could not persist this table cart:', error);
+    }
+  }, [cart, sessionId, slug, table?.token]);
+
   // Fetch and sync table orders for this phone's device_key
   const fetchTableOrders = useCallback(async (explicitToken = null) => {
     const token =
@@ -334,10 +402,10 @@ export default function CustomerMenuPage() {
       table?.token ||
       (typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null);
 
-    if (!token) return;
+    if (!token) return [];
 
     const deviceKey = getDeviceKey(slug);
-    if (!deviceKey) return;
+    if (!deviceKey) return [];
 
     // Clean up any legacy table_orders cache
     try {
@@ -354,14 +422,22 @@ export default function CustomerMenuPage() {
       if (error) {
         console.warn('get_my_orders error:', error);
         setOrdersError(true);
-        return;
+        return null;
       }
 
       setOrdersError(false);
 
       if (ordersData && Array.isArray(ordersData)) {
+        let sessionOrders = [];
+        try {
+          const currentSession = JSON.parse(localStorage.getItem(getScanSessionKey(slug, token)) || 'null');
+          const ownedOrderIds = Array.isArray(currentSession?.orderIds) ? currentSession.orderIds.map(String) : [];
+          sessionOrders = ordersData.filter((order) => ownedOrderIds.includes(String(order.id)));
+        } catch (storageError) {
+          console.warn('Could not match orders to this scan session:', storageError);
+        }
         // Check for transition to ready
-        ordersData.forEach((order) => {
+        sessionOrders.forEach((order) => {
           const currentStep = getOrderStep(order);
           const prevStep = prevOrderStepsRef.current[order.id];
           if (prevStep !== undefined && prevStep < 3 && currentStep === 3) {
@@ -374,11 +450,15 @@ export default function CustomerMenuPage() {
         });
 
         // Set table orders strictly from get_my_orders
-        setTableOrders(ordersData);
+        setTableOrders(sessionOrders);
+        return sessionOrders;
       }
+      setTableOrders([]);
+      return [];
     } catch (err) {
       console.warn('fetchTableOrders exception:', err);
       setOrdersError(true);
+      return null;
     }
   }, [table?.token, slug, showToast, t, isAmharic]);
 
@@ -426,6 +506,14 @@ export default function CustomerMenuPage() {
     async function init() {
       try {
         setLoading(true);
+        setCart([]);
+        setTable(null);
+        setTableOrders([]);
+        setSessionId('');
+        setWelcomeBack(null);
+        setShowWelcome(false);
+        setTableError('');
+        setScanNotice('');
 
         const { data: c, error: cafeErr } = await supabase
           .from('cafes')
@@ -436,6 +524,15 @@ export default function CustomerMenuPage() {
         if (cafeErr || !c) {
           if (isMounted) {
             setMissing(true);
+            setLoading(false);
+          }
+          return;
+        }
+
+        const activeUntil = c.active_until ? new Date(c.active_until).getTime() : null;
+        if (c.active === false || (activeUntil && activeUntil <= Date.now())) {
+          if (isMounted) {
+            setCafeUnavailable(true);
             setLoading(false);
           }
           return;
@@ -473,6 +570,14 @@ export default function CustomerMenuPage() {
             if (isMounted) {
               setTableError('This table is not active. Please ask the staff.');
               sessionStorage.removeItem(`table_token_${slug}`);
+              const staleSessionKey = getScanSessionKey(slug, activeToken);
+              try {
+                const staleSession = JSON.parse(localStorage.getItem(staleSessionKey) || 'null');
+                if (staleSession?.id) localStorage.removeItem(getSessionCartKey(staleSession.id));
+                localStorage.removeItem(staleSessionKey);
+              } catch (storageError) {
+                console.warn('Could not clear inactive table session:', storageError);
+              }
               setTable(null);
             }
           } else {
@@ -485,20 +590,91 @@ export default function CustomerMenuPage() {
               setTable(tableData);
               sessionStorage.setItem(`table_token_${slug}`, activeToken);
 
-              const welcomeSeen = sessionStorage.getItem(`welcome_seen_${slug}_${activeToken}`);
-              if (!welcomeSeen) {
-                setShowWelcome(true);
-                sessionStorage.setItem(`welcome_seen_${slug}_${activeToken}`, 'true');
-              }
-
               // Clean up any legacy order cache from localStorage
               try {
                 localStorage.removeItem(`table_orders_${slug}_${activeToken}`);
                 localStorage.removeItem(`table_order_ids_${slug}_${activeToken}`);
               } catch {}
 
-              // Fetch private orders from DB for this device_key
-              fetchTableOrders(activeToken);
+              const navigationType = performance.getEntriesByType('navigation')[0]?.type;
+              const isNewScan = navigationType === 'navigate' && Boolean(urlToken);
+              const sessionKey = getScanSessionKey(slug, activeToken);
+              let storedSession = null;
+              let storedCart = [];
+              let previousOrder = null;
+              try {
+                storedSession = JSON.parse(localStorage.getItem(sessionKey) || 'null');
+                if (storedSession?.id) {
+                  storedCart = JSON.parse(localStorage.getItem(getSessionCartKey(storedSession.id)) || '[]');
+                  if (!Array.isArray(storedCart)) storedCart = [];
+                }
+                previousOrder = JSON.parse(localStorage.getItem(`last-order:${slug}:${activeToken}`) || 'null');
+              } catch (storageError) {
+                console.warn('Could not restore table session from this device:', storageError);
+              }
+              const hours = Math.max(1, Number(c.settings?.session_hours) || 3);
+              const expired = !storedSession || !Number.isFinite(Date.parse(storedSession.lastActiveAt))
+                || Date.now() - Date.parse(storedSession.lastActiveAt) > hours * 60 * 60 * 1000;
+              let returnedOrders = await fetchTableOrders(activeToken);
+              if (expired) {
+                returnedOrders = [];
+                setTableOrders([]);
+              }
+              const activeOrders = Array.isArray(returnedOrders)
+                ? returnedOrders.filter((order) => !['paid', 'cancelled'].includes(String(order.status).toLowerCase()))
+                : [];
+              const retainedFinishedIds = !expired && Array.isArray(returnedOrders)
+                ? returnedOrders
+                    .filter((order) => ['paid', 'cancelled'].includes(String(order.status).toLowerCase()))
+                    .map((order) => String(order.id))
+                : [];
+              const startNewSession = expired || (isNewScan && !activeOrders.length && storedCart.length === 0);
+              const nextSession = !startNewSession && storedSession ? storedSession : {
+                id: createSessionId(),
+                startedAt: new Date().toISOString(),
+                lastActiveAt: new Date().toISOString(),
+                orderIds: retainedFinishedIds,
+              };
+
+              if (startNewSession && storedSession?.id) {
+                localStorage.removeItem(getSessionCartKey(storedSession.id));
+                localStorage.removeItem(sessionKey);
+              }
+              if (isMounted) {
+                setSessionId(nextSession.id);
+                localStorage.setItem(sessionKey, JSON.stringify(nextSession));
+                if (!isNewScan) {
+                  setCart(expired ? [] : storedCart);
+                } else if (startNewSession) {
+                  if (storedSession?.id) localStorage.removeItem(getSessionCartKey(storedSession.id));
+                  setCart([]);
+                  setWelcomeBack(null);
+                  setShowWelcome(true);
+                } else {
+                  setCart(storedCart);
+                  setShowWelcome(false);
+                  if (activeOrders.length) {
+                    setWelcomeBack({ type: 'orders', order: activeOrders[0], count: activeOrders.length });
+                  } else {
+                    setWelcomeBack({ type: 'cart', count: storedCart.reduce((sum, item) => sum + Number(item.qty || 0), 0) });
+                  }
+                }
+                if (previousOrder && Array.isArray(previousOrder.items)
+                  && Date.now() - Number(previousOrder.at || 0) <= 24 * 60 * 60 * 1000) {
+                  setLastOrderItems(previousOrder.items);
+                  setLastOrderAt(Number(previousOrder.at) || 0);
+                } else {
+                  setLastOrderItems([]);
+                  setLastOrderAt(0);
+                }
+                if (returnedOrders === null) {
+                  setCart([]);
+                  setScanNotice(isAmharic
+                    ? 'ትዕዛዞችዎን ማረጋገጥ አልተቻለም። አዲስ ትዕዛዝ በደህና ይጀምሩ።'
+                    : 'We could not check for earlier orders. You can safely start a fresh order.');
+                  if (isNewScan) setShowWelcome(true);
+                }
+              }
             }
           }
         }
@@ -547,6 +723,11 @@ export default function CustomerMenuPage() {
       return step > 0 && step < 4;
     });
   }, [tableOrders]);
+
+  const openMyOrders = () => {
+    touchSession();
+    setMyOrdersOpen(true);
+  };
 
   // Active open order for hero tracker
   const activeTableOrder = useMemo(() => {
@@ -808,17 +989,6 @@ export default function CustomerMenuPage() {
     return () => clearInterval(interval);
   }, [loadMenuData]);
 
-  // Auto-dismiss Welcome Screen after 2.5 seconds
-  useEffect(() => {
-    if (!showWelcome) return;
-    const timer = setTimeout(() => {
-      setWelcomeFading(true);
-      setTimeout(() => setShowWelcome(false), 300);
-    }, 2500);
-
-    return () => clearTimeout(timer);
-  }, [showWelcome]);
-
   const dismissWelcome = () => {
     setWelcomeFading(true);
     setTimeout(() => setShowWelcome(false), 250);
@@ -826,6 +996,7 @@ export default function CustomerMenuPage() {
 
   // Cart operations
   const addToCart = (item, qty = 1, note = '') => {
+    touchSession();
     setCart((prev) => {
       const existingIndex = prev.findIndex((i) => i.id === item.id && (i.note || '') === note);
       if (existingIndex > -1) {
@@ -841,6 +1012,7 @@ export default function CustomerMenuPage() {
   };
 
   const updateCartQty = (index, newQty) => {
+    touchSession();
     if (newQty <= 0) {
       setCart((prev) => prev.filter((_, idx) => idx !== index));
     } else {
@@ -875,6 +1047,7 @@ export default function CustomerMenuPage() {
     }
 
     setSubmittingOrder(true);
+    touchSession();
     try {
       const pItems = cart.map((i) => ({
         item_id: i.id,
@@ -895,6 +1068,31 @@ export default function CustomerMenuPage() {
       }
 
       if (data?.order_id) {
+        try {
+          const sessionKey = getScanSessionKey(slug, table.token);
+          const currentSession = JSON.parse(localStorage.getItem(sessionKey) || 'null');
+          if (currentSession?.id === sessionId) {
+            const orderIds = Array.isArray(currentSession.orderIds) ? currentSession.orderIds.map(String) : [];
+            localStorage.setItem(sessionKey, JSON.stringify({
+              ...currentSession,
+              lastActiveAt: new Date().toISOString(),
+              orderIds: [...new Set([...orderIds, String(data.order_id)])],
+            }));
+          }
+        } catch (storageError) {
+          console.warn('Could not associate the new order with this scan session:', storageError);
+        }
+        try {
+          const previousItems = cart.map((item) => ({ id: item.id, qty: item.qty }));
+          localStorage.setItem(`last-order:${slug}:${table.token}`, JSON.stringify({
+            at: Date.now(),
+            items: previousItems,
+          }));
+          setLastOrderItems(previousItems);
+          setLastOrderAt(Date.now());
+        } catch (storageError) {
+          console.warn('Could not save this device’s recent order items:', storageError);
+        }
         setCart([]);
         setCartOpen(false);
         setOrderSuccessModal(true);
@@ -923,6 +1121,43 @@ export default function CustomerMenuPage() {
     }
     return list;
   }, [items, activeCategory, searchQuery, lang, cafe?.default_language]);
+
+  const orderSameAgain = (savedItems = lastOrderItems) => {
+    const availableById = new Map(items.map((item) => [String(item.id), item]));
+    let skipped = 0;
+    const repeatCart = savedItems.reduce((rows, previous) => {
+      const item = availableById.get(String(previous.id ?? previous.item_id));
+      if (!item) {
+        skipped += 1;
+        return rows;
+      }
+      rows.push({ ...item, qty: Math.max(1, Number(previous.qty) || 1), note: '' });
+      return rows;
+    }, []);
+    setCart(repeatCart);
+    setWelcomeBack(null);
+    setShowWelcome(false);
+    if (skipped) {
+      showToast(isAmharic
+        ? `${skipped} የማይገኙ እቃዎች ተወግደዋል።`
+        : `${skipped} unavailable item${skipped === 1 ? ' was' : 's were'} skipped.`);
+    }
+    if (!repeatCart.length) {
+      showToast(isAmharic ? 'የቀድሞው ትዕዛዝ እቃዎች አሁን አይገኙም።' : 'Those items are no longer available.');
+    } else {
+      setCartOpen(true);
+    }
+  };
+
+  if (cafeUnavailable) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: 'var(--bg)' }}>
+        <div className="card" style={{ maxWidth: 420, textAlign: 'center' }}>
+          <h1 style={{ fontSize: 24 }}>{isAmharic ? 'ይህ ካፌ አሁን አይገኝም' : 'This cafe is currently unavailable.'}</h1>
+        </div>
+      </div>
+    );
+  }
 
   // Missing screen
   if (missing) {
@@ -974,37 +1209,75 @@ export default function CustomerMenuPage() {
   }
 
   const defLang = cafe.default_language || 'en';
-  const cafeTheme = cafe.theme || {};
-  const brandColor = cafeTheme.primary || cafeTheme.button || '#6F4E37';
-  const bgColor = cafeTheme.background || '#FFFFFF';
-  const textColor = cafeTheme.text || getDerivedTextColor(bgColor);
-  const btnTextColor = getDerivedButtonTextColor(brandColor);
-  const cardStyle = getDerivedCardStyle(bgColor);
+  const cafeTheme = mergeCafeTheme(cafe.theme || {});
+  const darkTheme = cafeTheme.dark.mode === 'custom' ? cafeTheme.dark : deriveDarkPalette(cafeTheme);
+  const customerDarkEnabled = cafeTheme.dark.enabled !== false;
+  const customerIsDark = customerDarkEnabled && (themeChoice === 'dark'
+    || (themeChoice === 'auto' && (cafeTheme.default_mode === 'dark'
+      || (cafeTheme.default_mode === 'system' && systemDark))));
+  const rawBrandColor = customerIsDark
+    ? (darkTheme.primary || '#D9A066')
+    : (cafeTheme.primary || cafeTheme.button || '#6F4E37');
+  const bgColor = customerIsDark
+    ? (darkTheme.background || '#1A120C')
+    : (cafeTheme.background || '#FFFFFF');
+  const textColor = customerIsDark
+    ? (darkTheme.text || '#F3EADF')
+    : (cafeTheme.text || getDerivedTextColor(bgColor));
+  const surfaceColor = customerIsDark ? (darkTheme.surface || '#251A12') : getDerivedCardStyle(bgColor).cardBg;
+  const surface2Color = customerIsDark ? (darkTheme.surface || '#2F221A') : '#F5F0E9';
+  const borderColor = customerIsDark ? (darkTheme.border || '#3A2B20') : getDerivedCardStyle(bgColor).cardBorder;
+  const brandColor = getContrastRatio(rawBrandColor, bgColor) >= 3
+    ? rawBrandColor
+    : autoFixBrandColor(rawBrandColor, bgColor);
+  const rawButtonColor = customerIsDark ? (darkTheme.button || brandColor) : (cafeTheme.button || brandColor);
+  const buttonColor = getContrastRatio(rawButtonColor, bgColor) >= 3
+    ? rawButtonColor
+    : autoFixBrandColor(rawButtonColor, bgColor);
+  const btnTextColor = getDerivedButtonTextColor(buttonColor);
+  const cardStyle = {
+    cardBg: surfaceColor,
+    cardBorder: borderColor,
+    mutedText: customerIsDark ? (darkTheme.muted || '#B7A593') : getDerivedCardStyle(bgColor).mutedText,
+  };
   const primaryColor = brandColor;
   const accentColor = brandColor;
+  const customerLogoUrl = customerIsDark ? (darkTheme.logo_url || cafe.logo_url) : cafe.logo_url;
+  const needsLogoChip = customerIsDark && !darkTheme.logo_url && Boolean(cafe.logo_url);
 
   return (
     <div
+      className="customer-menu"
+      data-theme={customerIsDark ? 'dark' : 'light'}
       style={{
         '--bg': bgColor,
+        '--surface': surfaceColor,
+        '--surface-2': surface2Color,
         '--color-cream': bgColor,
-        '--card-bg': cardStyle.cardBg,
+        '--card-bg': surfaceColor,
         '--color-foam': cardStyle.cardBg,
         '--text': textColor,
-        '--color-espresso': brandColor,
+        '--text-muted': cardStyle.mutedText,
+        '--color-espresso': textColor,
         '--color-muted': cardStyle.mutedText,
-        '--border': cardStyle.cardBorder,
-        '--color-line': cardStyle.cardBorder,
+        '--border': borderColor,
+        '--color-line': borderColor,
         '--primary': brandColor,
-        '--color-roast': brandColor,
-        '--color-caramel': brandColor,
+        '--color-roast': buttonColor,
+        '--primary-contrast': btnTextColor,
+        '--accent': customerIsDark ? (darkTheme.accent || '#E3A32B') : brandColor,
+        '--color-caramel': customerIsDark ? (darkTheme.accent || '#E3A32B') : brandColor,
         '--btn-text': btnTextColor,
+        '--success': customerIsDark ? '#7FB88A' : '#507B56',
+        '--warning': customerIsDark ? '#E3A32B' : '#8A5A00',
+        '--danger': customerIsDark ? '#E27D68' : '#A43D2B',
         backgroundColor: bgColor,
         color: textColor,
         minHeight: '100vh',
         paddingBottom: 110,
       }}
     >
+      <CustomerThemeSync isDark={customerIsDark} />
       {/* ─── OFFLINE NOTICE BANNER ─────────────────────────────────────────── */}
       {!isOnline && (
         <div
@@ -1139,14 +1412,16 @@ export default function CustomerMenuPage() {
           {/* Center Brand & Table Chip */}
           <div style={{ textAlign: 'center', margin: 'auto 0' }}>
             <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'center' }}>
+              <span style={needsLogoChip ? { background: '#FFFDF9', borderRadius: 24, padding: 6, display: 'inline-flex' } : undefined}>
               <CafeLogo
-                logoUrl={cafe.logo_url}
+                logoUrl={customerLogoUrl}
                 name={cafe.name}
                 brandColor={brandColor}
                 size={84}
                 radius={20}
                 border="3px solid rgba(255,255,255,0.25)"
               />
+              </span>
             </div>
 
             <div style={{ marginBottom: 14 }}>
@@ -1165,7 +1440,7 @@ export default function CustomerMenuPage() {
                 }}
               >
                 <span>🪑</span>
-                <span>{table?.name || (isAmharic ? 'ጠረጴዛ' : 'Table')}</span>
+                <span>{table ? `${isAmharic ? 'ጠረጴዛ' : 'Table'}: ${table.name}` : (isAmharic ? 'ጠረጴዛ' : 'Table')}</span>
               </span>
             </div>
 
@@ -1197,6 +1472,20 @@ export default function CustomerMenuPage() {
 
           {/* Bottom Action button */}
           <div>
+            {scanNotice && (
+              <p style={{ color: '#F3EADF', marginBottom: 10, textAlign: 'center', fontSize: 13 }}>{scanNotice}</p>
+            )}
+            {lastOrderItems.length > 0 && lastOrderAt && (
+              <Button
+                fullWidth
+                size="lg"
+                variant="secondary"
+                style={{ minHeight: 48, marginBottom: 10 }}
+                onClick={orderSameAgain}
+              >
+                {isAmharic ? 'ያለፈውን ትዕዛዝ እንደገና ይዘዙ' : 'Order the same again'}
+              </Button>
+            )}
             <Button
               fullWidth
               size="lg"
@@ -1224,7 +1513,8 @@ export default function CustomerMenuPage() {
           }}
         >
           {/* Top-right language picker */}
-          <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 10 }}>
+          <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+            {customerDarkEnabled && <ThemeToggle compact />}
             <LanguageSwitcher languages={cafe.languages || ['en', 'am']} size="sm" />
           </div>
         </div>
@@ -1248,14 +1538,16 @@ export default function CustomerMenuPage() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+              <span style={needsLogoChip ? { background: '#FFFDF9', borderRadius: 20, padding: 5, display: 'inline-flex' } : undefined}>
               <CafeLogo
-                logoUrl={cafe.logo_url}
+                logoUrl={customerLogoUrl}
                 name={cafe.name}
                 brandColor={brandColor}
                 size={64}
                 radius={16}
                 border="2px solid var(--color-line)"
               />
+              </span>
 
               <div style={{ flex: 1, minWidth: 0 }}>
                 <h1
@@ -1320,7 +1612,7 @@ export default function CustomerMenuPage() {
 
               {table ? (
                 <Badge variant="caramel" size="sm">
-                  🪑 {table.name} · {isAmharic ? 'ትዕዛዝ ክፍት ነው' : 'Ordering enabled'}
+                  🪑 {isAmharic ? 'ጠረጴዛ' : 'Table'}: {table.name} · {isAmharic ? 'ትዕዛዝ ክፍት ነው' : 'Ordering enabled'}
                 </Badge>
               ) : (
                 <Badge variant="neutral" size="sm">
@@ -1331,7 +1623,7 @@ export default function CustomerMenuPage() {
               {/* My Orders shortcut — only in table ordering mode */}
               {table && (
                 <button
-                  onClick={() => setMyOrdersOpen(true)}
+                  onClick={openMyOrders}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -1409,7 +1701,7 @@ export default function CustomerMenuPage() {
                   </span>
                 </div>
                 <button
-                  onClick={() => setMyOrdersOpen(true)}
+                  onClick={openMyOrders}
                   style={{
                     background: 'rgba(255,255,255,0.12)',
                     border: '1px solid rgba(255,255,255,0.25)',
@@ -1862,6 +2154,76 @@ export default function CustomerMenuPage() {
         </div>
       )}
 
+      <BottomSheet
+        isOpen={Boolean(welcomeBack)}
+        onClose={() => setWelcomeBack(null)}
+        title={isAmharic ? 'እንኳን ተመልሰው መጡ' : 'Welcome back'}
+        subtitle={table ? `${isAmharic ? 'ጠረጴዛ' : 'Table'}: ${table.name}` : ''}
+      >
+        {welcomeBack?.type === 'cart' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <p style={{ color: 'var(--text)', fontSize: 16, marginBottom: 4 }}>
+              {isAmharic
+                ? `በትዕዛዝዎ ውስጥ ${welcomeBack.count} እቃዎች አሉ።`
+                : `You have ${welcomeBack.count} items in your order.`}
+            </p>
+            <Button fullWidth size="lg" style={{ minHeight: 48 }} onClick={() => setWelcomeBack(null)}>
+              {isAmharic ? 'ትዕዛዜን ቀጥል' : 'Continue my order'}
+            </Button>
+            <Button
+              fullWidth
+              size="lg"
+              variant="secondary"
+              style={{ minHeight: 48 }}
+              onClick={() => {
+                if (!window.confirm(isAmharic ? 'የቀድሞውን ቅርጫት ይጥፋ?' : 'Clear your saved cart and start over?')) return;
+                setCart([]);
+                if (sessionId) localStorage.removeItem(getSessionCartKey(sessionId));
+                touchSession();
+                setWelcomeBack(null);
+              }}
+            >
+              {isAmharic ? 'ከአዲስ ጀምር' : 'Start over'}
+            </Button>
+          </div>
+        ) : welcomeBack?.type === 'orders' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <p style={{ color: 'var(--text)', fontSize: 16, marginBottom: 4 }}>
+              {isAmharic
+                ? `ትዕዛዝዎ በ${table?.name || 'ጠረጴዛ'} ላይ ${welcomeBack.order?.status || 'ክፍት'} ነው።`
+                : `Your order at ${table?.name || 'this table'} is ${welcomeBack.order?.status || 'open'}.`}
+            </p>
+            <Button fullWidth size="lg" style={{ minHeight: 48 }} onClick={() => {
+              setWelcomeBack(null);
+              openMyOrders();
+            }}>
+              {isAmharic ? 'ትዕዛዜን ተመልከት' : 'View my order'}
+            </Button>
+            <Button fullWidth size="lg" variant="secondary" style={{ minHeight: 48 }} onClick={() => {
+              setCart([]);
+              setWelcomeBack(null);
+              setCartOpen(false);
+              touchSession();
+            }}>
+              {isAmharic ? 'ሌላ ትዕዛዝ ይጨምሩ' : 'Order more'}
+            </Button>
+            {welcomeBack.order?.editable !== false && (
+              <Button fullWidth size="lg" variant="ghost" style={{ minHeight: 48 }} onClick={() => {
+                setWelcomeBack(null);
+                openEditOrderSheet(welcomeBack.order);
+              }}>
+                {isAmharic ? 'ትዕዛዜን አስተካክል' : 'Edit my order'}
+              </Button>
+            )}
+            {lastOrderItems.length > 0 && lastOrderAt > 0 && (
+              <Button fullWidth size="lg" variant="ghost" style={{ minHeight: 48 }} onClick={() => orderSameAgain()}>
+                {isAmharic ? 'ያለፈውን ትዕዛዝ እንደገና ይዘዙ' : 'Order the same again'}
+              </Button>
+            )}
+          </div>
+        ) : null}
+      </BottomSheet>
+
       {/* ─── CART BOTTOM SHEET ──────────────────────────────────────────────── */}
       <BottomSheet
         isOpen={cartOpen}
@@ -1999,6 +2361,14 @@ export default function CustomerMenuPage() {
                   ? 'ከዚህ ጠረጴዛ የሚታዘዙ ትዕዛዞች እዚህ በቀጥታ ይታያሉ።'
                   : 'Orders placed from this table will appear here in real time.')}
             </p>
+            <p style={{ fontSize: 12, margin: '12px auto 0', color: 'var(--text-muted)' }}>
+              {isAmharic ? 'ትዕዛዝዎን ማየት ካልቻሉ ሰራተኞችን ይጠይቁ።' : "Can't see your order? Ask the staff."}
+            </p>
+            {lastOrderItems.length > 0 && lastOrderAt > 0 && (
+              <Button size="md" variant="secondary" style={{ marginTop: 14 }} onClick={() => orderSameAgain()}>
+                {isAmharic ? 'ያለፈውን ትዕዛዝ እንደገና ይዘዙ' : 'Order again'}
+              </Button>
+            )}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -2056,6 +2426,20 @@ export default function CustomerMenuPage() {
                         </div>
                       </div>
                     )}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      style={{ minHeight: 44, marginTop: 10 }}
+                      onClick={() => {
+                        setMyOrdersOpen(false);
+                        orderSameAgain((order.items || []).map((item) => ({
+                          id: item.item_id || item.id,
+                          qty: item.qty,
+                        })));
+                      }}
+                    >
+                      {isAmharic ? 'እንደገና ይዘዙ' : 'Order again'}
+                    </Button>
                   </div>
                 );
               }
@@ -2112,6 +2496,20 @@ export default function CustomerMenuPage() {
                         </div>
                       </div>
                     )}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      style={{ minHeight: 44, marginTop: 10 }}
+                      onClick={() => {
+                        setMyOrdersOpen(false);
+                        orderSameAgain((order.items || []).map((item) => ({
+                          id: item.item_id || item.id,
+                          qty: item.qty,
+                        })));
+                      }}
+                    >
+                      {isAmharic ? 'እንደገና ይዘዙ' : 'Order again'}
+                    </Button>
                   </div>
                 );
               }

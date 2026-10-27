@@ -8,6 +8,7 @@ import * as alarm from '../../lib/alarm';
 import { useOrderAlarm } from '../../lib/useOrderAlarm';
 import { CoffeeIllustration, Logo } from '../../components/ui/Logo';
 import { Button, IconButton } from '../../components/ui/Button';
+import { ThemeToggle } from '../../components/ui/ThemeToggle';
 import { Badge, EmptyState } from '../../components/ui/Badge';
 import {
   Volume2,
@@ -112,8 +113,8 @@ class BartenderPageErrorBoundary extends Component {
           className="theme-dark anim-fade-in"
           style={{
             minHeight: '100vh',
-            backgroundColor: '#1A120C',
-            color: '#FFFDF9',
+            backgroundColor: 'var(--bg)',
+            color: 'var(--text)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -125,8 +126,8 @@ class BartenderPageErrorBoundary extends Component {
             style={{
               maxWidth: 480,
               width: '100%',
-              backgroundColor: '#251A12',
-              border: '1px solid #3B2A1E',
+              backgroundColor: 'var(--surface)',
+              border: '1px solid var(--border)',
               textAlign: 'center',
               padding: 36,
               borderRadius: 'var(--radius-card)',
@@ -138,7 +139,7 @@ class BartenderPageErrorBoundary extends Component {
                 fontFamily: 'var(--font-serif)',
                 fontSize: 24,
                 fontWeight: 700,
-                color: '#FFFDF9',
+                color: 'var(--text)',
                 marginTop: 20,
                 marginBottom: 10,
               }}
@@ -1066,11 +1067,11 @@ function BartenderDashboardInner() {
 
   return (
     <div
-      className="theme-dark"
+      className="bartender-screen"
       style={{
         minHeight: '100vh',
-        backgroundColor: '#1A120C',
-        color: '#FFFDF9',
+        backgroundColor: 'var(--bg)',
+        color: 'var(--text)',
         display: 'flex',
         flexDirection: 'column',
       }}
@@ -1135,8 +1136,8 @@ function BartenderDashboardInner() {
           position: 'sticky',
           top: 0,
           zIndex: 50,
-          backgroundColor: '#251A12',
-          borderBottom: '1px solid #3B2A1E',
+          backgroundColor: 'var(--surface)',
+          borderBottom: '1px solid var(--border)',
           padding: '12px 24px',
           display: 'flex',
           alignItems: 'center',
@@ -1194,6 +1195,7 @@ function BartenderDashboardInner() {
 
         {/* Tab Filters and Audio Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <ThemeToggle compact />
           {/* Queue Filter Tabs */}
           <div
             style={{

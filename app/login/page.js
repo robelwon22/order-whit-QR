@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { supabase } from '../../lib/supabase';
 import { useI18n } from '../../lib/i18n';
 import { LanguageSwitcher } from '../../components/ui/LanguageSwitcher';
+import { ThemeToggle } from '../../components/ui/ThemeToggle';
 import { Logo, CoffeeIllustration } from '../../components/ui/Logo';
 import { Button, IconButton } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
@@ -225,7 +226,8 @@ export default function LoginPage() {
         }}
       >
         {/* Top-right Language Switcher */}
-        <div style={{ position: 'absolute', top: 24, right: 24 }}>
+        <div style={{ position: 'absolute', top: 24, right: 24, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ThemeToggle compact />
           <LanguageSwitcher size="sm" />
         </div>
 

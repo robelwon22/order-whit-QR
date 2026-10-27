@@ -8,6 +8,7 @@ import { LanguageSwitcher } from './LanguageSwitcher';
 import { useI18n } from '../../lib/i18n';
 import { Button, IconButton } from './Button';
 import { AdminBackground } from './AdminBackground';
+import { ThemeToggle } from './ThemeToggle';
 import {
   Coffee,
   Palette,
@@ -80,8 +81,8 @@ export function AppShell({
       <aside
         style={{
           width: 260,
-          backgroundColor: 'var(--color-foam)',
-          borderRight: '1px solid var(--color-line)',
+          backgroundColor: 'var(--surface)',
+          borderRight: '1px solid var(--border)',
           display: 'flex',
           flexDirection: 'column',
           position: 'sticky',
@@ -327,6 +328,7 @@ export function AppShell({
               </a>
             )}
 
+            <ThemeToggle compact />
             <LanguageSwitcher size="sm" />
           </div>
         </header>

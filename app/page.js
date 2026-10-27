@@ -7,6 +7,7 @@ import { useI18n } from '../lib/i18n';
 import { Logo, CoffeeIllustration } from '../components/ui/Logo';
 import { Button, IconButton } from '../components/ui/Button';
 import { LanguageSwitcher } from '../components/ui/LanguageSwitcher';
+import { ThemeToggle } from '../components/ui/ThemeToggle';
 import { Badge } from '../components/ui/Badge';
 import {
   QrCode,
@@ -71,11 +72,12 @@ export default function LandingPage() {
     <div style={{ backgroundColor: 'var(--bg)', color: 'var(--text)', minHeight: '100vh', overflowX: 'hidden' }}>
       {/* ─── 1. NAVBAR ────────────────────────────────────────────────────────── */}
       <header
+        className="landing-header"
         style={{
           position: 'sticky',
           top: 0,
           zIndex: 100,
-          backgroundColor: 'rgba(247, 241, 232, 0.92)',
+          backgroundColor: 'var(--surface)',
           backdropFilter: 'blur(10px)',
           borderBottom: '1px solid var(--color-line)',
           transition: 'all var(--transition-fast)',
@@ -120,6 +122,7 @@ export default function LandingPage() {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <LanguageSwitcher size="sm" />
+            <ThemeToggle compact />
             <Link href="/login">
               <Button variant="ghost" size="sm" className="hidden-mobile-xs">
                 {isAmharic ? 'የሰራተኛ መግቢያ' : 'Staff login'}
