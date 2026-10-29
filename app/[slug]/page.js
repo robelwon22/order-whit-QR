@@ -69,6 +69,29 @@ export function formatOrderTime(dateStr) {
   }
 }
 
+function createSessionId() {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getScanSessionKey(cafeSlug, tableToken) {
+  return `session:${cafeSlug}:${tableToken}`;
+}
+
+function getSessionCartKey(id) {
+  return `cart:${id}`;
+}
+
+function CustomerThemeSync({ isDark, background }) {
+  useEffect(() => {
+    document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', background || (isDark ? '#1A120C' : '#F7F1E8'));
+  }, [isDark, background]);
+  return null;
+}
+
 export function getDeviceKey(cafeSlug) {
   if (typeof window === 'undefined') return '';
   const keyName = `deviceKey:${cafeSlug}`;
@@ -82,28 +105,6 @@ export function getDeviceKey(cafeSlug) {
       localStorage.setItem(keyName, key);
     }
 
-    function createSessionId() {
-      return typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    }
-
-    function getScanSessionKey(cafeSlug, tableToken) {
-      return `session:${cafeSlug}:${tableToken}`;
-    }
-
-    function getSessionCartKey(id) {
-      return `cart:${id}`;
-    }
-
-    function CustomerThemeSync({ isDark, background }) {
-      useEffect(() => {
-        document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
-        const meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.setAttribute('content', background || (isDark ? '#1A120C' : '#F7F1E8'));
-      }, [isDark, background]);
-      return null;
-    }
     return key;
   } catch {
     return '';
@@ -303,7 +304,7 @@ export default function CustomerMenuPage() {
       }
       link.href = cafe.logo_url;
     }
-  }, [cafe?.name, cafe?.logo_url]);
+  }, [cafe]);
   const [cats, setCats] = useState([]);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -714,7 +715,7 @@ export default function CustomerMenuPage() {
       isMounted = false;
       supabase.removeChannel(ch);
     };
-  }, [slug, urlToken, setLang, fetchTableOrders, loadMenuData]);
+  }, [slug, urlToken, setLang, fetchTableOrders, loadMenuData, isAmharic]);
 
   // Determine if there is any active open order
   const hasOpenOrder = useMemo(() => {

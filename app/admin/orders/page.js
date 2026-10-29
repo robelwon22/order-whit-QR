@@ -465,7 +465,8 @@ export default function AdminOrdersPage() {
     };
   }, [activeCafe?.id, dayData?.to, fetchOrders, loadSelectedDay, loadSettings, loadUnclosedOrders, selectedDay, showToast, t, todayDay, updateDateUrl]);
 
-  const orders = dayData?.orders || [];
+  const timezone = activeCafe?.settings?.timezone || 'Africa/Addis_Ababa';
+  const orders = useMemo(() => dayData?.orders || [], [dayData?.orders]);
   const orderedForNumbers = useMemo(
     () => [...orders].sort((left, right) => new Date(left.created_at) - new Date(right.created_at)),
     [orders]
@@ -675,7 +676,6 @@ export default function AdminOrdersPage() {
     printWindow.document.close();
   };
 
-  const timezone = activeCafe?.settings?.timezone || 'Africa/Addis_Ababa';
   const dayLabel = dayData
     ? formatDayLabel(dayData.from, dayData.to, timezone, lang)
     : '';

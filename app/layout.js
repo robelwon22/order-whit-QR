@@ -18,12 +18,12 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta name="theme-color" content="#F7F1E8" />
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var p=localStorage.getItem('app_theme_choice');var dark=p==='dark'||(!p&&location.pathname.indexOf('/bartender')===0)||(p!=='light'&&p!=='dark'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=dark?'dark':'light';var m=document.querySelector('meta[name="theme-color"]');if(m)m.content=dark?'#1A120C':'#F7F1E8'}catch(e){document.documentElement.dataset.theme=location.pathname.indexOf('/bartender')===0?'dark':'light'}})();`,
+            __html: `(function(){try{var raw=localStorage.getItem('app_theme_choice');var choice=['auto','light','dark'].includes(raw)?raw:'auto';var isDark=choice==='dark'||(choice==='auto'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=isDark?'dark':'light';var m=document.querySelector('meta[name="theme-color"]');if(m)m.content=isDark?'#1A120C':'#F7F1E8';}catch(e){document.documentElement.dataset.theme=location.pathname.indexOf('/bartender')===0?'dark':'light';var m=document.querySelector('meta[name="theme-color"]');if(m)m.content=location.pathname.indexOf('/bartender')===0?'#1A120C':'#F7F1E8';}})();`,
           }}
         />
         <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>☕</text></svg>" />

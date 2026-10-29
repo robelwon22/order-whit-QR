@@ -132,7 +132,7 @@ export default function AdminDesignPage() {
     setColorError('');
     setOldLogosToDelete([]);
     setOldDarkLogosToDelete([]);
-  }, [activeCafe?.id, activeCafe?.updated_at]);
+  }, [activeCafe]);
 
   // Load cafe categories & items for preview
   useEffect(() => {
@@ -185,6 +185,15 @@ export default function AdminDesignPage() {
   const effectiveDarkPalette = darkMode === 'custom'
     ? { ...autoDarkPalette, background: darkBackground, text: darkText, primary: darkPrimary, button: darkButton }
     : autoDarkPalette;
+
+  const previewColors = previewMode === 'dark' ? effectiveDarkPalette : null;
+  const previewBgColor = previewColors?.background || bgColor;
+  const previewBrandColor = previewColors?.primary || brandColor;
+  const previewTextColor = previewColors?.text || derivedTextColor;
+  const previewBtnTextColor = getDerivedButtonTextColor(previewColors?.button || brandColor);
+  const previewCardStyle = previewColors
+    ? { cardBg: previewColors.surface || '#251A12', cardBorder: previewColors.border || '#3A2B20', mutedText: previewColors.muted || '#B7A593' }
+    : getDerivedCardStyle(previewBgColor);
 
   // Contrast ratios
   const textBgContrast = useMemo(() => getContrastRatio(derivedTextColor, bgColor), [derivedTextColor, bgColor]);
@@ -606,22 +615,14 @@ export default function AdminDesignPage() {
 
   // Live Preview Component (Rendered on desktop side & mobile modal)
   const renderLivePreviewContent = () => {
-    const previewColors = previewMode === 'dark' ? effectiveDarkPalette : null;
-    const bgColor = previewColors?.background || bgColor;
-    const brandColor = previewColors?.primary || brandColor;
-    const derivedTextColor = previewColors?.text || derivedTextColor;
-    const derivedBtnTextColor = getDerivedButtonTextColor(previewColors?.button || brandColor);
-    const cardStyle = previewColors
-      ? { cardBg: previewColors.surface || '#251A12', cardBorder: previewColors.border || '#3A2B20', mutedText: previewColors.muted || '#B7A593' }
-      : getDerivedCardStyle(bgColor);
     const previewLogoUrl = previewMode === 'dark' ? (darkLogoUrl || logoUrl) : logoUrl;
     return (
     <div
       style={{
         width: '100%',
         height: '100%',
-        backgroundColor: bgColor,
-        color: derivedTextColor,
+        backgroundColor: previewBgColor,
+        color: previewTextColor,
         display: 'flex',
         flexDirection: 'column',
         position: 'relative',
@@ -640,7 +641,7 @@ export default function AdminDesignPage() {
           fontSize: 11,
           fontWeight: 600,
           opacity: 0.65,
-          color: derivedTextColor,
+          color: previewTextColor,
         }}
       >
         <span>9:41</span>

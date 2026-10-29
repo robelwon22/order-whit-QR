@@ -2,6 +2,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Monitor, Moon, Sun } from 'lucide-react';
+import { isValidThemeChoice, safeReadStorage, safeWriteStorage } from '../../lib/storage';
 
 const ThemeContext = createContext({
   choice: 'auto',
@@ -10,10 +11,11 @@ const ThemeContext = createContext({
 });
 
 function getSystemDark() {
-  return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
 function applyTheme(isDark) {
+  if (typeof document === 'undefined') return;
   const theme = isDark ? 'dark' : 'light';
   document.documentElement.dataset.theme = theme;
   const meta = document.querySelector('meta[name="theme-color"]');
@@ -25,24 +27,38 @@ export function ThemeProvider({ children }) {
   const [systemDark, setSystemDark] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem('app_theme_choice');
-    const path = window.location.pathname;
-    setChoiceState(saved === 'light' || saved === 'dark' ? saved : path.startsWith('/bartender') ? 'dark' : 'auto');
-    setSystemDark(getSystemDark());
+    try {
+      const raw = safeReadStorage('app_theme_choice', null);
+      const saved = raw && isValidThemeChoice(raw) ? raw : null;
+      const path = typeof window !== 'undefined' ? window.location.pathname : '';
+      const fallbackChoice = path.startsWith('/bartender') ? 'dark' : 'auto';
+      setChoiceState(saved || fallbackChoice);
+      setSystemDark(getSystemDark());
 
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = (event) => setSystemDark(event.matches);
-    media.addEventListener?.('change', onChange);
-    return () => media.removeEventListener?.('change', onChange);
+      const media = typeof window !== 'undefined' && !!window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+      const onChange = (event) => setSystemDark(Boolean(event?.matches));
+      media?.addEventListener?.('change', onChange);
+      return () => media?.removeEventListener?.('change', onChange);
+    } catch (error) {
+      console.warn('Theme preference unavailable, defaulting to auto.', error);
+      setChoiceState('auto');
+      setSystemDark(getSystemDark());
+    }
   }, []);
 
   const isDark = choice === 'dark' || (choice === 'auto' && systemDark);
-  useEffect(() => applyTheme(isDark), [isDark]);
+  useEffect(() => {
+    try {
+      applyTheme(isDark);
+    } catch (error) {
+      console.warn('Theme apply failed.', error);
+    }
+  }, [isDark]);
 
   const setChoice = useCallback((next) => {
-    if (!['auto', 'light', 'dark'].includes(next)) return;
+    if (!isValidThemeChoice(next)) return;
     setChoiceState(next);
-    localStorage.setItem('app_theme_choice', next);
+    safeWriteStorage('app_theme_choice', next);
   }, []);
 
   const value = useMemo(() => ({ choice, isDark, systemDark, setChoice }), [choice, isDark, systemDark, setChoice]);

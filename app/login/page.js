@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { supabase } from '../../lib/supabase';
 import { useI18n } from '../../lib/i18n';
@@ -21,23 +21,7 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [showForgotHint, setShowForgotHint] = useState(false);
 
-  useEffect(() => {
-    async function checkExistingSession() {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          await routeUserByRole(session.user.id);
-        }
-      } catch (e) {
-        console.error('Session check failed:', e);
-      } finally {
-        setCheckingAuth(false);
-      }
-    }
-    checkExistingSession();
-  }, []);
-
-  async function routeUserByRole(userId) {
+  const routeUserByRole = useCallback(async (userId) => {
     const { data: staff, error } = await supabase
       .from('staff')
       .select('role, active, cafe_id, full_name')
@@ -81,7 +65,23 @@ export default function LoginPage() {
     } else {
       setErrorMsg(`Unknown role: ${staff.role}`);
     }
-  }
+  }, [t]);
+
+  useEffect(() => {
+    async function checkExistingSession() {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          await routeUserByRole(session.user.id);
+        }
+      } catch (e) {
+        console.error('Session check failed:', e);
+      } finally {
+        setCheckingAuth(false);
+      }
+    }
+    checkExistingSession();
+  }, [routeUserByRole]);
 
   async function handleLogin(e) {
     e.preventDefault();

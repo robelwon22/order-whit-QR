@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { supabase, pick } from '../../lib/supabase';
 import { useStaff } from '../../lib/useStaff';
@@ -54,7 +54,7 @@ export default function AdminMenuPage() {
     if (cafe && !activeCafe) setActiveCafe(cafe);
   }, [cafe, activeCafe]);
 
-  const loadMenu = async () => {
+  const loadMenu = useCallback(async () => {
     if (!activeCafe) return;
     setLoadingMenu(true);
     try {
@@ -68,11 +68,11 @@ export default function AdminMenuPage() {
     } finally {
       setLoadingMenu(false);
     }
-  };
+  }, [activeCafe, showToast]);
 
   useEffect(() => {
     loadMenu();
-  }, [activeCafe]);
+  }, [loadMenu]);
 
   const langs = activeCafe?.languages || ['en', 'am'];
   const defLang = activeCafe?.default_language || 'en';

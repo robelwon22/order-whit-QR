@@ -336,6 +336,54 @@ function BartenderDashboardInner() {
       });
   }, [me?.cafe_id]);
 
+  const loadOrders = useCallback(async () => {
+    if (!me?.cafe_id) return;
+    try {
+      const { data: activeOrders, error: orderErr } = await supabase
+        .from('orders')
+        .select('*, order_stations(*)')
+        .eq('cafe_id', me.cafe_id)
+        .in('status', ['open', 'served'])
+        .order('created_at', { ascending: true });
+
+      if (orderErr) {
+        console.error('Error fetching orders:', orderErr);
+        return;
+      }
+
+      const safeOrders = Array.isArray(activeOrders) ? activeOrders : [];
+      if (isMountedRef.current) {
+        setOrders(safeOrders);
+      }
+
+      if (safeOrders.length > 0) {
+        const orderIds = safeOrders.map((o) => o?.id).filter(Boolean);
+        if (orderIds.length > 0) {
+          const { data: items, error: itemsErr } = await supabase
+            .from('order_items')
+            .select('*')
+            .in('order_id', orderIds);
+
+          if (!itemsErr && Array.isArray(items)) {
+            const map = {};
+            items.forEach((item) => {
+              if (!item?.order_id) return;
+              if (!map[item.order_id]) map[item.order_id] = [];
+              map[item.order_id].push(item);
+            });
+            if (isMountedRef.current) {
+              setOrderItemsMap(map);
+            }
+          }
+        }
+      } else if (isMountedRef.current) {
+        setOrderItemsMap({});
+      }
+    } catch (e) {
+      console.error('Error in loadOrders:', e);
+    }
+  }, [me?.cafe_id]);
+
   // Staff Edit Order State
   const [editingOrder, setEditingOrder] = useState(null);
   const [editItems, setEditItems] = useState([]);
@@ -598,7 +646,6 @@ function BartenderDashboardInner() {
           return;
         }
 
-        // Handle super_admin previewing bartender station
         if (staff.role === 'super_admin' && !staff.cafe_id) {
           const { data: defaultCafe } = await supabase.from('cafes').select('*').limit(1).maybeSingle();
           if (defaultCafe) {
@@ -637,58 +684,6 @@ function BartenderDashboardInner() {
     }
     init();
   }, []);
-
-  // Fetch active queue orders
-  const loadOrders = useCallback(async () => {
-    if (!me?.cafe_id) return;
-    try {
-      // Query active orders (open or served, oldest first FIFO)
-      const { data: activeOrders, error: orderErr } = await supabase
-        .from('orders')
-        .select('*, order_stations(*)')
-        .eq('cafe_id', me.cafe_id)
-        .in('status', ['open', 'served'])
-        .order('created_at', { ascending: true });
-
-      if (orderErr) {
-        console.error('Error fetching orders:', orderErr);
-        return;
-      }
-
-      const safeOrders = Array.isArray(activeOrders) ? activeOrders : [];
-      if (isMountedRef.current) {
-        setOrders(safeOrders);
-      }
-
-      if (safeOrders.length > 0) {
-        const orderIds = safeOrders.map((o) => o?.id).filter(Boolean);
-        if (orderIds.length > 0) {
-          const { data: items, error: itemsErr } = await supabase
-            .from('order_items')
-            .select('*')
-            .in('order_id', orderIds);
-
-          if (!itemsErr && Array.isArray(items)) {
-            const map = {};
-            items.forEach((item) => {
-              if (!item?.order_id) return;
-              if (!map[item.order_id]) map[item.order_id] = [];
-              map[item.order_id].push(item);
-            });
-            if (isMountedRef.current) {
-              setOrderItemsMap(map);
-            }
-          }
-        }
-      } else {
-        if (isMountedRef.current) {
-          setOrderItemsMap({});
-        }
-      }
-    } catch (e) {
-      console.error('Error in loadOrders:', e);
-    }
-  }, [me?.cafe_id]);
 
   // Realtime subscription setup
   useEffect(() => {
@@ -751,7 +746,7 @@ function BartenderDashboardInner() {
         supabase.removeChannel(channel).catch(() => {});
       }
     };
-  }, [me?.cafe_id, loadOrders]);
+  }, [me?.cafe_id, loadOrders, showBartenderToast]);
 
   useEffect(() => {
     if (!cafe) return undefined;
@@ -774,7 +769,7 @@ function BartenderDashboardInner() {
       cancelled = true;
       clearTimeout(boundaryTimer);
     };
-  }, [cafe?.id, cafe?.settings?.timezone, cafe?.settings?.day_start_hour, loadOrders]);
+  }, [cafe, loadOrders]);
 
   // Handle Start Shift click
   const handleStartShift = async () => {

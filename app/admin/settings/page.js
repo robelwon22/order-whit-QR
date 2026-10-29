@@ -73,7 +73,7 @@ export default function AdminSettingsPage() {
     const configuredHour = Number(cafe.settings?.day_start_hour);
     setDayStartHour(Number.isInteger(configuredHour) && configuredHour >= 0 && configuredHour <= 23 ? configuredHour : 4);
     setTimezone(cafe.settings?.timezone || 'Africa/Addis_Ababa');
-  }, [cafe?.id, cafe?.settings?.day_start_hour, cafe?.settings?.timezone]);
+  }, [cafe]);
 
   useEffect(() => {
     if (!cafe) return;
@@ -88,7 +88,7 @@ export default function AdminSettingsPage() {
         intensity: settings.bg?.intensity || 'soft',
       },
     });
-  }, [cafe?.id]);
+  }, [cafe]);
 
   // Clean up audio on unmount
   useEffect(() => {
