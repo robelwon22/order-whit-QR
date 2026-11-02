@@ -12,9 +12,8 @@ import { Modal } from '../../../components/ui/Modal';
 import { Badge, EmptyState, Skeleton, ConfirmDialog } from '../../../components/ui/Badge';
 import { getCafeLogoHtml } from '../../../components/ui/CafeLogo';
 import { TableQrCode } from '../../../components/ui/TableQrCode';
+import { getSiteUrl, isLocalUrl } from '../../../lib/siteUrl';
 import {
-  getSiteUrl,
-  isInvalidForProduction,
   buildTableQrUrl,
   generateQRSvg,
   generateQRDataURLAsync,
@@ -67,9 +66,19 @@ export default function TablesAdminPage() {
   // Print layout choice: 'a4-grid' (6 cards) or 'tent' (table tent)
   const [printLayout, setPrintLayout] = useState('a4-grid');
 
-  const siteUrl = getSiteUrl();
-  const isLocalhostWarning = isInvalidForProduction(siteUrl);
-  const qrModalUrl = buildTableQrUrl(activeCafe?.slug, qrModalTable?.token);
+  const [siteUrl, setSiteUrl] = useState(
+    process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '') || '',
+  );
+  const isLocalhostWarning = isLocalUrl(siteUrl);
+  const isSiteUrlMissing = !siteUrl;
+  const hasDomainIssue = isLocalhostWarning || isSiteUrlMissing;
+  const qrModalUrl = buildTableQrUrl(activeCafe?.slug, qrModalTable?.token, siteUrl);
+
+  useEffect(() => {
+    const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+    if (!configuredUrl && process.env.NODE_ENV === 'production') return;
+    setSiteUrl(getSiteUrl());
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => setSession(s));
@@ -215,7 +224,21 @@ export default function TablesAdminPage() {
     setTestingScan(true);
     setTestScanResults(null);
 
-    const targetUrl = buildTableQrUrl(activeCafe.slug, tbl.token);
+    const targetUrl = buildTableQrUrl(activeCafe.slug, tbl.token, siteUrl);
+    if (!targetUrl || isLocalUrl(siteUrl)) {
+      setTestScanResults({
+        targetUrl,
+        cafeFound: false,
+        tableFound: false,
+        tableActive: false,
+        orderingEnabled: false,
+        errorDetail: isSiteUrlMissing
+          ? 'NEXT_PUBLIC_SITE_URL is not configured. Set it to https://order-whit-qr.vercel.app and redeploy.'
+          : 'Test Scan is blocked because the site URL points to a local network address.',
+      });
+      setTestingScan(false);
+      return;
+    }
 
     // Diagnostics checks
     const checks = {
@@ -270,7 +293,11 @@ export default function TablesAdminPage() {
   // Print All QR Codes (Supports A4 Grid of 6 and Table Tent layouts)
   const handlePrintAll = (layout = 'a4-grid') => {
     if (isLocalhostWarning) {
-      showToast('Cannot print while NEXT_PUBLIC_SITE_URL is localhost or missing.', 'error');
+      showToast('Printing is blocked because NEXT_PUBLIC_SITE_URL points to a local network address.', 'error');
+      return;
+    }
+    if (isSiteUrlMissing) {
+      showToast('NEXT_PUBLIC_SITE_URL is missing. Set it to https://order-whit-qr.vercel.app and redeploy.', 'error');
       return;
     }
 
@@ -282,7 +309,7 @@ export default function TablesAdminPage() {
 
     const cardsHtml = activeTables
       .map((t) => {
-        const url = buildTableQrUrl(activeCafe.slug, t.token);
+        const url = buildTableQrUrl(activeCafe.slug, t.token, siteUrl);
         const svg = generateQRSvg(url, 240, 4);
         const logoHtml = getCafeLogoHtml({
           logoUrl: activeCafe.logo_url,
@@ -467,9 +494,9 @@ export default function TablesAdminPage() {
         <div
           className="card"
           style={{
-            backgroundColor: isLocalhostWarning ? '#3B1713' : 'var(--color-foam)',
-            borderColor: isLocalhostWarning ? 'var(--color-terracotta)' : 'var(--color-line)',
-            color: isLocalhostWarning ? '#FFFDF9' : 'var(--color-espresso)',
+            backgroundColor: hasDomainIssue ? '#3B1713' : 'var(--color-foam)',
+            borderColor: hasDomainIssue ? 'var(--color-terracotta)' : 'var(--color-line)',
+            color: hasDomainIssue ? '#FFFDF9' : 'var(--color-espresso)',
             padding: '20px 24px',
             boxShadow: 'var(--shadow)',
           }}
@@ -481,15 +508,15 @@ export default function TablesAdminPage() {
                   width: 44,
                   height: 44,
                   borderRadius: 'var(--radius)',
-                  backgroundColor: isLocalhostWarning ? 'var(--color-terracotta)' : 'var(--color-sage-light)',
-                  color: isLocalhostWarning ? '#FFF' : 'var(--color-sage)',
+                  backgroundColor: hasDomainIssue ? 'var(--color-terracotta)' : 'var(--color-sage-light)',
+                  color: hasDomainIssue ? '#FFF' : 'var(--color-sage)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   flexShrink: 0,
                 }}
               >
-                {isLocalhostWarning ? <AlertTriangle size={24} /> : <Activity size={24} />}
+                {hasDomainIssue ? <AlertTriangle size={24} /> : <Activity size={24} />}
               </div>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -497,26 +524,32 @@ export default function TablesAdminPage() {
                     style={{
                       fontSize: 18,
                       fontFamily: 'var(--font-serif)',
-                      color: isLocalhostWarning ? '#FFFDF9' : 'var(--color-espresso)',
+                      color: hasDomainIssue ? '#FFFDF9' : 'var(--color-espresso)',
                     }}
                   >
-                    {isLocalhostWarning ? 'QR Domain Warning (Localhost Detected)' : 'QR Code System Healthy'}
+                    {isLocalhostWarning
+                      ? 'QR Domain Warning (Localhost Detected)'
+                      : isSiteUrlMissing
+                        ? 'QR Domain Not Configured'
+                        : 'QR Code System Healthy'}
                   </h2>
-                  <Badge variant={isLocalhostWarning ? 'danger' : 'success'} size="sm" dot>
-                    {isLocalhostWarning ? 'Blocked' : 'Production Ready'}
+                  <Badge variant={isLocalhostWarning || isSiteUrlMissing ? 'danger' : 'success'} size="sm" dot>
+                    {isLocalhostWarning ? 'Blocked' : isSiteUrlMissing ? 'Not Configured' : 'Production Ready'}
                   </Badge>
                 </div>
                 <p
                   style={{
                     fontSize: 13,
-                    color: isLocalhostWarning ? '#FCA5A5' : 'var(--color-muted)',
+                    color: hasDomainIssue ? '#FCA5A5' : 'var(--color-muted)',
                     marginTop: 4,
                     lineHeight: 1.5,
                   }}
                 >
                   {isLocalhostWarning
-                    ? 'QR codes cannot be printed with localhost. Phones cannot open a localhost address. Set NEXT_PUBLIC_SITE_URL in your Vercel project environment variables (e.g. https://order-with-qr.vercel.app).'
-                    : `Live Site URL: ${siteUrl} · ${activeCount} active tables ready for instant ordering.`}
+                    ? 'QR codes cannot be printed with a local or private-network URL. Set NEXT_PUBLIC_SITE_URL in Vercel to https://order-whit-qr.vercel.app.'
+                    : isSiteUrlMissing
+                      ? 'NEXT_PUBLIC_SITE_URL is missing. Set it in Vercel to https://order-whit-qr.vercel.app and redeploy. QR codes cannot be generated until it is configured.'
+                      : `Live Site URL: ${siteUrl} · ${activeCount} active tables ready for instant ordering.`}
                 </p>
               </div>
             </div>
@@ -645,7 +678,7 @@ export default function TablesAdminPage() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {tables.map((tbl) => {
-                const qrUrl = buildTableQrUrl(activeCafe?.slug, tbl.token);
+                const qrUrl = buildTableQrUrl(activeCafe?.slug, tbl.token, siteUrl);
                 return (
                   <div
                     key={tbl.id}
@@ -908,6 +941,7 @@ export default function TablesAdminPage() {
                 variant="primary"
                 fullWidth
                 icon={<ExternalLink size={16} />}
+                disabled={!testScanResults.targetUrl}
                 onClick={() => window.open(testScanResults.targetUrl, '_blank')}
               >
                 Open Exact Scan Link in New Tab

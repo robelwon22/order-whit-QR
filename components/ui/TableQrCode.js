@@ -21,7 +21,7 @@ export function TableQrCode({ url }) {
       setSvg('');
       setError('');
       if (!url) {
-        setError('Set NEXT_PUBLIC_SITE_URL to the production domain to generate QR codes.');
+        setError('Set NEXT_PUBLIC_SITE_URL to https://order-whit-qr.vercel.app to generate QR codes.');
         return;
       }
 

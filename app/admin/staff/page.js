@@ -10,6 +10,7 @@ import { Button, IconButton } from '../../../components/ui/Button';
 import { Input, Select } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
 import { Badge, EmptyState, Skeleton, ConfirmDialog } from '../../../components/ui/Badge';
+import { getSiteUrl } from '../../../lib/siteUrl';
 import {
   Users,
   UserPlus,
@@ -47,6 +48,7 @@ export default function StaffAdminPage() {
   const { isAmharic } = useI18n();
 
   const [activeCafe, setActiveCafe] = useState(null);
+  const [siteUrl, setSiteUrl] = useState('');
   const [staffList, setStaffList] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [session, setSession] = useState(null);
@@ -62,6 +64,10 @@ export default function StaffAdminPage() {
 
   // Issued credentials box
   const [issuedCreds, setIssuedCreds] = useState(null); // { email, password, name }
+
+  useEffect(() => {
+    setSiteUrl(getSiteUrl());
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => setSession(s));
@@ -288,14 +294,14 @@ export default function StaffAdminPage() {
             >
               <div><b>Email:</b> {issuedCreds.email}</div>
               <div><b>Password:</b> <span style={{ backgroundColor: '#F59E0B', color: '#FFF', padding: '2px 8px', borderRadius: 4, fontWeight: 700 }}>{issuedCreds.password}</span></div>
-              <div><b>Portal:</b> {typeof window !== 'undefined' ? window.location.origin : ''}/login</div>
+              <div><b>Portal:</b> {siteUrl}/login</div>
             </div>
 
             <Button
               variant="secondary"
               icon={<Copy size={15} />}
               onClick={async () => {
-                const text = `Staff Login:\nEmail: ${issuedCreds.email}\nPassword: ${issuedCreds.password}\nLogin URL: ${window.location.origin}/login`;
+                const text = `Staff Login:\nEmail: ${issuedCreds.email}\nPassword: ${issuedCreds.password}\nLogin URL: ${getSiteUrl()}/login`;
                 await navigator.clipboard.writeText(text);
                 showToast('Login credentials copied to clipboard!', 'success');
               }}
