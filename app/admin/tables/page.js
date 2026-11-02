@@ -11,6 +11,7 @@ import { Input, Select, Toggle } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
 import { Badge, EmptyState, Skeleton, ConfirmDialog } from '../../../components/ui/Badge';
 import { getCafeLogoHtml } from '../../../components/ui/CafeLogo';
+import { TableQrCode } from '../../../components/ui/TableQrCode';
 import {
   getSiteUrl,
   isInvalidForProduction,
@@ -68,6 +69,7 @@ export default function TablesAdminPage() {
 
   const siteUrl = getSiteUrl();
   const isLocalhostWarning = isInvalidForProduction(siteUrl);
+  const qrModalUrl = buildTableQrUrl(activeCafe?.slug, qrModalTable?.token);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => setSession(s));
@@ -923,24 +925,8 @@ export default function TablesAdminPage() {
           title={`QR Code · ${qrModalTable.name}`}
           subtitle={activeCafe?.name}
         >
-          {(() => {
-            const qrUrl = buildTableQrUrl(activeCafe?.slug, qrModalTable.token);
-            const svgStr = generateQRSvg(qrUrl, 240, 4);
-
-            return (
-              <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 18 }}>
-                <div
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    padding: 18,
-                    borderRadius: 'var(--radius)',
-                    border: '2px solid var(--color-line)',
-                    display: 'inline-flex',
-                    alignSelf: 'center',
-                    boxShadow: 'var(--shadow-sm)',
-                  }}
-                  dangerouslySetInnerHTML={{ __html: svgStr }}
-                />
+          <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <TableQrCode url={qrModalUrl} />
 
                 <div
                   style={{
@@ -953,15 +939,16 @@ export default function TablesAdminPage() {
                     color: 'var(--color-espresso)',
                   }}
                 >
-                  {qrUrl}
+                  {qrModalUrl}
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <Button
                     variant="secondary"
                     icon={<Copy size={15} />}
+                    disabled={!qrModalUrl}
                     onClick={async () => {
-                      await navigator.clipboard.writeText(qrUrl);
+                      await navigator.clipboard.writeText(qrModalUrl);
                       showToast('QR destination URL copied!', 'success');
                     }}
                   >
@@ -970,8 +957,13 @@ export default function TablesAdminPage() {
                   <Button
                     variant="secondary"
                     icon={<Download size={15} />}
+                    disabled={!qrModalUrl}
                     onClick={async () => {
-                      const dataUrl = await generateQRDataURLAsync(qrUrl, 800);
+                      const dataUrl = await generateQRDataURLAsync(qrModalUrl, 800);
+                      if (!dataUrl) {
+                        showToast('Failed to generate the QR code image.', 'error');
+                        return;
+                      }
                       const a = document.createElement('a');
                       a.href = dataUrl;
                       a.download = `QR-${activeCafe?.slug}-${qrModalTable.name.replace(/\s+/g, '_')}.png`;
@@ -1001,9 +993,7 @@ export default function TablesAdminPage() {
                     Reset QR Token (Invalidate Old Code)
                   </Button>
                 </div>
-              </div>
-            );
-          })()}
+          </div>
         </Modal>
       )}
 
