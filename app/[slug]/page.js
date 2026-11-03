@@ -83,6 +83,18 @@ function getSessionCartKey(id) {
   return `cart:${id}`;
 }
 
+/**
+ * Rejects a Supabase request after the configured timeout so page loading cannot hang.
+ */
+function withTimeout(request, requestName, timeoutMs = 10000) {
+  let timeoutId;
+  const timeout = new Promise((resolve, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${requestName} timed out after ${timeoutMs / 1000} seconds.`)), timeoutMs);
+  });
+
+  return Promise.race([request, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 function CustomerThemeSync({ isDark, background }) {
   useEffect(() => {
     document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
@@ -310,6 +322,7 @@ export default function CustomerMenuPage() {
   const [loading, setLoading] = useState(true);
   const [missing, setMissing] = useState(false);
   const [cafeUnavailable, setCafeUnavailable] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
   // Table & Ordering Mode State
   const [table, setTable] = useState(null); // { token, name }
@@ -365,6 +378,14 @@ export default function CustomerMenuPage() {
       setToastMessage(null);
     }, 5000);
   }, []);
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const setLangRef = useRef(setLang);
+  setLangRef.current = setLang;
+  const isAmharicRef = useRef(isAmharic);
+  isAmharicRef.current = isAmharic;
 
   // Read URL table token
   const urlToken = searchParams.get('t') || searchParams.get('table');
@@ -442,9 +463,9 @@ export default function CustomerMenuPage() {
           const currentStep = getOrderStep(order);
           const prevStep = prevOrderStepsRef.current[order.id];
           if (prevStep !== undefined && prevStep < 3 && currentStep === 3) {
-            showToast(
-              t('menu.order_ready_toast') ||
-                (isAmharic ? 'ትዕዛዝዎ ዝግጁ ነው! ሊወስዱት ይችላሉ።' : 'Your order is Ready! Please collect it.')
+            showToastRef.current(
+              tRef.current('menu.order_ready_toast') ||
+                (isAmharicRef.current ? 'ትዕዛዝዎ ዝግጁ ነው! ሊወስዱት ይችላሉ።' : 'Your order is Ready! Please collect it.')
             );
           }
           prevOrderStepsRef.current[order.id] = currentStep;
@@ -461,95 +482,112 @@ export default function CustomerMenuPage() {
       setOrdersError(true);
       return null;
     }
-  }, [table?.token, slug, showToast, t, isAmharic]);
+  }, [table?.token, slug]);
+
+  const fetchTableOrdersRef = useRef(fetchTableOrders);
+  fetchTableOrdersRef.current = fetchTableOrders;
+  const loadMenuDataRef = useRef(null);
+  const retryInitRef = useRef(null);
 
   // Load menu data (cafe, categories, items)
   const loadMenuData = useCallback(async () => {
     try {
-      const { data: c, error: cafeErr } = await supabase
+      const { data: c, error: cafeErr } = await withTimeout(supabase
         .from('cafes')
         .select('*')
         .eq('slug', slug)
-        .maybeSingle();
+        .maybeSingle(), 'Cafe refresh');
 
-      if (cafeErr || !c) return;
+      if (cafeErr) throw cafeErr;
+      if (!c) return;
 
       setCafe(c);
 
       const [catRes, itemRes] = await Promise.all([
-        supabase
+        withTimeout(supabase
           .from('categories')
           .select('*')
           .eq('cafe_id', c.id)
           .eq('visible', true)
           .order('sort_order')
-          .order('created_at'),
-        supabase
+          .order('created_at'), 'Category refresh'),
+        withTimeout(supabase
           .from('items')
           .select('*')
           .eq('cafe_id', c.id)
           .eq('available', true)
           .order('sort_order')
-          .order('created_at'),
+          .order('created_at'), 'Item refresh'),
       ]);
 
+      if (catRes.error) throw catRes.error;
+      if (itemRes.error) throw itemRes.error;
       setCats(catRes.data || []);
       setItems(itemRes.data || []);
     } catch (err) {
       console.warn('loadMenuData background refresh error:', err);
     }
   }, [slug]);
+  loadMenuDataRef.current = loadMenuData;
 
   // Initial load and Realtime setup
   useEffect(() => {
     let isMounted = true;
 
-    async function init() {
+    /**
+     * Loads cafe/menu data and resolves the optional table token for this route.
+     */
+    async function init(isRetry = false) {
       try {
         setLoading(true);
-        setCart([]);
-        setTable(null);
-        setTableOrders([]);
-        setSessionId('');
-        setWelcomeBack(null);
-        setShowWelcome(false);
-        setTableError('');
-        setScanNotice('');
+        setLoadError('');
+        setMissing(false);
+        setCafeUnavailable(false);
+        if (!isRetry) {
+          setCart([]);
+          setTable(null);
+          setTableOrders([]);
+          setSessionId('');
+          setWelcomeBack(null);
+          setShowWelcome(false);
+          setTableError('');
+          setScanNotice('');
+        }
 
-        const { data: c, error: cafeErr } = await supabase
+        const { data: c, error: cafeErr } = await withTimeout(supabase
           .from('cafes')
           .select('*')
           .eq('slug', slug)
-          .maybeSingle();
+          .maybeSingle(), 'Cafe request');
 
-        if (cafeErr || !c) {
-          if (isMounted) {
-            setMissing(true);
-            setLoading(false);
-          }
+        if (cafeErr) {
+          throw new Error(`Could not load this cafe: ${cafeErr.message}`);
+        }
+
+        if (!c) {
+          if (isMounted) setMissing(true);
           return;
         }
 
         const activeUntil = c.active_until ? new Date(c.active_until).getTime() : null;
         if (c.active === false || (activeUntil && activeUntil <= Date.now())) {
-          if (isMounted) {
-            setCafeUnavailable(true);
-            setLoading(false);
-          }
+          if (isMounted) setCafeUnavailable(true);
           return;
         }
 
         if (isMounted) {
           setCafe(c);
           if (c.default_language && !localStorage.getItem('app_lang')) {
-            setLang(c.default_language);
+            setLangRef.current(c.default_language);
           }
         }
 
         const [catRes, itemRes] = await Promise.all([
-          supabase.from('categories').select('*').eq('cafe_id', c.id).eq('visible', true).order('sort_order').order('created_at'),
-          supabase.from('items').select('*').eq('cafe_id', c.id).eq('available', true).order('sort_order').order('created_at'),
+          withTimeout(supabase.from('categories').select('*').eq('cafe_id', c.id).eq('visible', true).order('sort_order').order('created_at'), 'Categories request'),
+          withTimeout(supabase.from('items').select('*').eq('cafe_id', c.id).eq('available', true).order('sort_order').order('created_at'), 'Items request'),
         ]);
+        if (catRes.error) throw new Error(`Could not load menu categories: ${catRes.error.message}`);
+        if (itemRes.error) throw new Error(`Could not load menu items: ${itemRes.error.message}`);
 
         if (isMounted) {
           setCats(catRes.data || []);
@@ -563,9 +601,18 @@ export default function CustomerMenuPage() {
         }
 
         if (activeToken) {
-          const { data: resolved, error: rpcErr } = await supabase.rpc('resolve_table', {
-            p_token: activeToken,
-          });
+          let resolved;
+          let rpcErr;
+          try {
+            const result = await withTimeout(supabase.rpc('resolve_table', {
+              p_token: activeToken,
+            }), 'Table validation request');
+            resolved = result.data;
+            rpcErr = result.error;
+          } catch (tableValidationError) {
+            console.error('Could not validate this table token:', tableValidationError);
+            rpcErr = tableValidationError;
+          }
 
           if (rpcErr || !resolved || resolved.length === 0 || resolved[0].cafe_slug !== slug) {
             if (isMounted) {
@@ -616,7 +663,16 @@ export default function CustomerMenuPage() {
               const hours = Math.max(1, Number(c.settings?.session_hours) || 3);
               const expired = !storedSession || !Number.isFinite(Date.parse(storedSession.lastActiveAt))
                 || Date.now() - Date.parse(storedSession.lastActiveAt) > hours * 60 * 60 * 1000;
-              let returnedOrders = await fetchTableOrders(activeToken);
+              let returnedOrders;
+              try {
+                returnedOrders = await withTimeout(
+                  fetchTableOrdersRef.current(activeToken),
+                  'Table orders request',
+                );
+              } catch (ordersRequestError) {
+                console.error('Could not load table orders:', ordersRequestError);
+                returnedOrders = null;
+              }
               if (expired) {
                 returnedOrders = [];
                 setTableOrders([]);
@@ -670,7 +726,7 @@ export default function CustomerMenuPage() {
                 }
                 if (returnedOrders === null) {
                   setCart([]);
-                  setScanNotice(isAmharic
+                  setScanNotice(isAmharicRef.current
                     ? 'ትዕዛዞችዎን ማረጋገጥ አልተቻለም። አዲስ ትዕዛዝ በደህና ይጀምሩ።'
                     : 'We could not check for earlier orders. You can safely start a fresh order.');
                   if (isNewScan) setShowWelcome(true);
@@ -681,20 +737,30 @@ export default function CustomerMenuPage() {
         }
       } catch (err) {
         console.error('Error loading menu:', err);
+        if (isMounted) {
+          setLoadError(err.message || 'The menu could not be loaded. Please try again.');
+        }
       } finally {
         if (isMounted) setLoading(false);
       }
     }
 
+    retryInitRef.current = () => init(true);
     init();
 
-    // Subscribe to realtime item, category, cafe, and order changes
+    return () => {
+      isMounted = false;
+    };
+  }, [slug, urlToken]);
+
+  // Subscribe to realtime item, category, cafe, and order changes once per cafe slug.
+  useEffect(() => {
     const ch = supabase.channel(`customer-realtime-${slug}`);
     ch.on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
-      loadMenuData();
+      loadMenuDataRef.current?.();
     })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => {
-        loadMenuData();
+        loadMenuDataRef.current?.();
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'cafes' }, (payload) => {
         if (payload.new && payload.new.slug === slug) {
@@ -703,19 +769,18 @@ export default function CustomerMenuPage() {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
         const token = typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null;
-        if (token) fetchTableOrders(token);
+        if (token) fetchTableOrdersRef.current(token);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_stations' }, () => {
         const token = typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null;
-        if (token) fetchTableOrders(token);
+        if (token) fetchTableOrdersRef.current(token);
       })
       .subscribe();
 
     return () => {
-      isMounted = false;
       supabase.removeChannel(ch);
     };
-  }, [slug, urlToken, setLang, fetchTableOrders, loadMenuData, isAmharic]);
+  }, [slug]);
 
   // Determine if there is any active open order
   const hasOpenOrder = useMemo(() => {
@@ -1163,6 +1228,32 @@ export default function CustomerMenuPage() {
     );
   }
 
+  if (loadError) {
+    return (
+      <div
+        role="alert"
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          padding: 24,
+          background: 'var(--bg)',
+        }}
+      >
+        <div className="card" style={{ maxWidth: 420, textAlign: 'center', padding: 28 }}>
+          <AlertCircle size={32} color="var(--color-terracotta)" style={{ margin: '0 auto 12px' }} />
+          <h1 style={{ fontSize: 22, marginBottom: 8 }}>
+            {isAmharic ? 'ሜኑውን መጫን አልተቻለም' : 'Could not load the menu'}
+          </h1>
+          <p style={{ color: 'var(--color-muted)', marginBottom: 18 }}>{loadError}</p>
+          <Button variant="primary" iconLeft={<RotateCw size={16} />} onClick={() => retryInitRef.current?.()}>
+            {isAmharic ? 'እንደገና ሞክር' : 'Retry'}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   // Missing screen
   if (missing) {
     return (
@@ -1207,34 +1298,6 @@ export default function CustomerMenuPage() {
           <Skeleton height={88} borderRadius={16} />
           <Skeleton height={88} borderRadius={16} />
           <Skeleton height={88} borderRadius={16} />
-        </div>
-      </div>
-    );
-  }
-
-  // Stop inactive and invalid table QR scans before showing the customer menu.
-  if (tableError) {
-    return (
-      <div
-        role="alert"
-        style={{
-          minHeight: '100vh',
-          display: 'grid',
-          placeItems: 'center',
-          padding: 24,
-          background: 'var(--bg)',
-        }}
-      >
-        <div className="card" style={{ maxWidth: 420, textAlign: 'center', padding: 28 }}>
-          <AlertCircle size={32} color="var(--color-terracotta)" style={{ margin: '0 auto 12px' }} />
-          <h1 style={{ fontSize: 24, marginBottom: 8 }}>
-            {isAmharic ? 'ይህ ጠረጴዛ ንቁ አይደለም' : 'This table is inactive.'}
-          </h1>
-          <p style={{ color: 'var(--color-muted)' }}>
-            {isAmharic
-              ? 'እባክዎ ሰራተኛን ያነጋግሩ ወይም አዲስ QR ኮድ ይቃኙ።'
-              : 'Please ask the staff to activate this table or scan its current QR code.'}
-          </p>
         </div>
       </div>
     );
