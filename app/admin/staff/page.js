@@ -26,11 +26,17 @@ import {
   Lock,
 } from 'lucide-react';
 
+/**
+ * Builds an Authorization header from the current Supabase session.
+ */
 function authHeader(session) {
   return { Authorization: 'Bearer ' + session.access_token };
 }
 
 const SAFE = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+/**
+ * Creates a temporary password for staff-account setup and reset flows.
+ */
 function genPassword(len = 10) {
   let p = '';
   for (let i = 0; i < len; i++) p += SAFE[Math.floor(Math.random() * SAFE.length)];
@@ -42,6 +48,9 @@ function genPassword(len = 10) {
   return arr.sort(() => Math.random() - 0.5).join('');
 }
 
+/**
+ * Renders cafe staff management and its account administration actions.
+ */
 export default function StaffAdminPage() {
   const { staff: currentStaff, cafe, cafes, setCafe, loading: authLoading, logout } = useStaff(['cafe_admin', 'super_admin']);
   const { showToast } = useToast();
@@ -184,17 +193,19 @@ export default function StaffAdminPage() {
     )
       return;
 
+    const newPassword = genPassword();
     try {
-      const res = await fetch(`/api/staff/${member.user_id}/reset-password`, {
+      const res = await fetch(`/api/admin/staff/${member.user_id}/reset-password`, {
         method: 'POST',
-        headers: authHeader(session),
+        headers: { 'Content-Type': 'application/json', ...authHeader(session) },
+        body: JSON.stringify({ password: newPassword }),
       });
       const json = await res.json();
       if (json.success) {
         setIssuedCreds({
           name: member.full_name,
           email: json.email || member.email,
-          password: json.new_password,
+          password: newPassword,
         });
         showToast('Password reset. Share the new credentials with the employee.', 'success');
       } else {

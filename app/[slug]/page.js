@@ -12,6 +12,7 @@ import { BottomSheet } from '../../components/ui/BottomSheet';
 import { QtyStepper, Badge, EmptyState, Skeleton } from '../../components/ui/Badge';
 import { LanguageSwitcher } from '../../components/ui/LanguageSwitcher';
 import { ThemeToggle, useTheme } from '../../components/ui/ThemeToggle';
+import { Modal } from '../../components/ui/Modal';
 import {
   Search,
   ShoppingBag,
@@ -36,6 +37,9 @@ import {
   XCircle,
 } from 'lucide-react';
 
+/**
+ * Maps an order's status and station state to the customer progress step.
+ */
 export function getOrderStep(order) {
   if (!order) return 1;
   const status = (order.status || '').toLowerCase();
@@ -58,6 +62,9 @@ export function getOrderStep(order) {
   return 1;
 }
 
+/**
+ * Formats an order timestamp for display in the customer's local time.
+ */
 export function formatOrderTime(dateStr) {
   if (!dateStr) return '';
   try {
@@ -69,16 +76,25 @@ export function formatOrderTime(dateStr) {
   }
 }
 
+/**
+ * Creates a unique local identifier for a customer table session.
+ */
 function createSessionId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+/**
+ * Builds the local-storage key for a cafe and table-token scan session.
+ */
 function getScanSessionKey(cafeSlug, tableToken) {
   return `session:${cafeSlug}:${tableToken}`;
 }
 
+/**
+ * Builds the local-storage key for a cart associated with a session.
+ */
 function getSessionCartKey(id) {
   return `cart:${id}`;
 }
@@ -95,6 +111,9 @@ function withTimeout(request, requestName, timeoutMs = 10000) {
   return Promise.race([request, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
+/**
+ * Synchronizes the document theme metadata with the active cafe theme.
+ */
 function CustomerThemeSync({ isDark, background }) {
   useEffect(() => {
     document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
@@ -104,6 +123,9 @@ function CustomerThemeSync({ isDark, background }) {
   return null;
 }
 
+/**
+ * Returns or creates the stable browser device key used to identify customer orders.
+ */
 export function getDeviceKey(cafeSlug) {
   if (typeof window === 'undefined') return '';
   const keyName = `deviceKey:${cafeSlug}`;
@@ -123,6 +145,9 @@ export function getDeviceKey(cafeSlug) {
   }
 }
 
+/**
+ * Converts database and network errors into customer-facing localized messages.
+ */
 export function mapOrderError(err, isAmharic = false) {
   const raw = typeof err === 'string' ? err : err?.message || err?.details || '';
   const code = raw.toLowerCase();
@@ -173,6 +198,9 @@ export function mapOrderError(err, isAmharic = false) {
   return raw || (isAmharic ? 'ስህተት ተከስቷል፣ እባክዎ እንደገና ይሞክሩ።' : 'An error occurred. Please try again.');
 }
 
+/**
+ * Renders the localized progress indicator for a customer order.
+ */
 function OrderStepper({ step, isAmharic, t }) {
   const tr = typeof t === 'function' ? t : (k) => k;
   if (step === -1) {
@@ -292,6 +320,9 @@ function OrderStepper({ step, isAmharic, t }) {
   );
 }
 
+/**
+ * Loads a cafe menu and manages the customer's optional table-ordering session.
+ */
 export default function CustomerMenuPage() {
   const { slug } = useParams();
   const searchParams = useSearchParams();
@@ -355,6 +386,8 @@ export default function CustomerMenuPage() {
   const [tableOrders, setTableOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [ordersError, setOrdersError] = useState(false);
+  const [sessionEnded, setSessionEnded] = useState(false);
+  const [sessionEndNoticeOpen, setSessionEndNoticeOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [toastMessage, setToastMessage] = useState(null);
 
@@ -370,7 +403,67 @@ export default function CustomerMenuPage() {
 
   const prevOrderStepsRef = useRef({});
   const toastTimerRef = useRef(null);
+  const sessionEndedRef = useRef(false);
+  const tableRef = useRef(table);
+  tableRef.current = table;
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  const tableOrdersRef = useRef(tableOrders);
+  tableOrdersRef.current = tableOrders;
 
+  /**
+   * Ends this device's table-ordering session and removes its persisted credentials and cart.
+   */
+  const endCustomerSession = useCallback(() => {
+    if (sessionEndedRef.current) return;
+    sessionEndedRef.current = true;
+    const token = tableRef.current?.token;
+    const currentSessionId = sessionIdRef.current;
+    try {
+      localStorage.setItem(`session_ended_${slug}`, 'true');
+    } catch (storageError) {
+      console.warn('Could not persist the ended table session:', storageError);
+    }
+    try {
+      sessionStorage.removeItem(`table_token_${slug}`);
+    } catch (storageError) {
+      console.warn('Could not clear the ended table token:', storageError);
+    }
+    if (token) {
+      try {
+        localStorage.removeItem(getScanSessionKey(slug, token));
+        localStorage.removeItem(`last-order:${slug}:${token}`);
+      } catch (storageError) {
+        console.warn('Could not clear the saved table scan session:', storageError);
+      }
+    }
+    if (currentSessionId) {
+      try {
+        localStorage.removeItem(getSessionCartKey(currentSessionId));
+      } catch (storageError) {
+        console.warn('Could not clear the saved table cart:', storageError);
+      }
+    }
+    tableRef.current = null;
+    tableOrdersRef.current = [];
+    sessionIdRef.current = '';
+    setCart([]);
+    setTable(null);
+    setTableOrders([]);
+    setSessionId('');
+    setActiveOrder(null);
+    setWelcomeBack(null);
+    setLastOrderItems([]);
+    setLastOrderAt(0);
+    setCartOpen(false);
+    setMyOrdersOpen(false);
+    setSessionEnded(true);
+    setSessionEndNoticeOpen(true);
+  }, [slug]);
+
+  /**
+   * Displays a temporary customer notification.
+   */
   const showToast = useCallback((msg) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToastMessage(msg);
@@ -390,6 +483,9 @@ export default function CustomerMenuPage() {
   // Read URL table token
   const urlToken = searchParams.get('t') || searchParams.get('table');
 
+  /**
+   * Refreshes the activity timestamp for the current browser table session.
+   */
   const touchSession = useCallback(() => {
     if (!sessionId || !slug || !table?.token) return;
     try {
@@ -419,6 +515,7 @@ export default function CustomerMenuPage() {
 
   // Fetch and sync table orders for this phone's device_key
   const fetchTableOrders = useCallback(async (explicitToken = null) => {
+    if (sessionEndedRef.current) return [];
     const token =
       explicitToken ||
       table?.token ||
@@ -441,6 +538,7 @@ export default function CustomerMenuPage() {
         p_device_key: deviceKey,
       });
 
+      if (sessionEndedRef.current) return [];
       if (error) {
         console.warn('get_my_orders error:', error);
         setOrdersError(true);
@@ -539,6 +637,30 @@ export default function CustomerMenuPage() {
      */
     async function init(isRetry = false) {
       try {
+        const navigationType = performance.getEntriesByType('navigation')[0]?.type;
+        const isFreshScan = navigationType === 'navigate' && Boolean(urlToken);
+        const endedFlagKey = `session_ended_${slug}`;
+        let persistedSessionEnded = false;
+        try {
+          persistedSessionEnded = localStorage.getItem(endedFlagKey) === 'true';
+          if (isFreshScan) {
+            localStorage.removeItem(endedFlagKey);
+            persistedSessionEnded = false;
+          }
+        } catch (storageError) {
+          console.warn('Could not read the table session state:', storageError);
+        }
+        sessionEndedRef.current = persistedSessionEnded;
+        setSessionEnded(persistedSessionEnded);
+        setSessionEndNoticeOpen(persistedSessionEnded);
+        if (persistedSessionEnded) {
+          try {
+            sessionStorage.removeItem(`table_token_${slug}`);
+          } catch (storageError) {
+            console.warn('Could not clear the ended table token:', storageError);
+          }
+        }
+
         setLoading(true);
         setLoadError('');
         setMissing(false);
@@ -595,8 +717,8 @@ export default function CustomerMenuPage() {
         }
 
         // Resolve Table Token
-        let activeToken = urlToken;
-        if (!activeToken && typeof window !== 'undefined') {
+        let activeToken = sessionEndedRef.current ? null : urlToken;
+        if (!activeToken && !sessionEndedRef.current && typeof window !== 'undefined') {
           activeToken = sessionStorage.getItem(`table_token_${slug}`);
         }
 
@@ -644,8 +766,7 @@ export default function CustomerMenuPage() {
                 localStorage.removeItem(`table_order_ids_${slug}_${activeToken}`);
               } catch {}
 
-              const navigationType = performance.getEntriesByType('navigation')[0]?.type;
-              const isNewScan = navigationType === 'navigate' && Boolean(urlToken);
+              const isNewScan = isFreshScan;
               const sessionKey = getScanSessionKey(slug, activeToken);
               let storedSession = null;
               let storedCart = [];
@@ -790,6 +911,9 @@ export default function CustomerMenuPage() {
     });
   }, [tableOrders]);
 
+  /**
+   * Opens the customer's order list and marks the session as active.
+   */
   const openMyOrders = () => {
     touchSession();
     setMyOrdersOpen(true);
@@ -815,6 +939,9 @@ export default function CustomerMenuPage() {
 
     let timeoutId = null;
 
+    /**
+     * Schedules the next background fetch for the current table's orders.
+     */
     const schedulePoll = () => {
       if (timeoutId) clearTimeout(timeoutId);
       if (typeof document !== 'undefined' && document.hidden) return;
@@ -830,6 +957,9 @@ export default function CustomerMenuPage() {
 
     schedulePoll();
 
+    /**
+     * Refreshes menu and order data when the browser tab becomes visible.
+     */
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         fetchTableOrders(token);
@@ -840,6 +970,9 @@ export default function CustomerMenuPage() {
       }
     };
 
+    /**
+     * Refreshes menu and order data when the browser reconnects.
+     */
     const handleOnline = () => {
       setIsOnline(true);
       fetchTableOrders(token);
@@ -847,10 +980,16 @@ export default function CustomerMenuPage() {
       schedulePoll();
     };
 
+    /**
+     * Updates the customer interface when the browser loses connectivity.
+     */
     const handleOffline = () => {
       setIsOnline(false);
     };
 
+    /**
+     * Refreshes menu and order data when the browser window regains focus.
+     */
     const handleFocus = () => {
       fetchTableOrders(token);
       loadMenuData();
@@ -871,37 +1010,48 @@ export default function CustomerMenuPage() {
   }, [table?.token, slug, hasOpenOrder, fetchTableOrders, loadMenuData]);
 
   // Part B: Orders countdown ticker (paid and cancelled orders countdown and auto-fade out)
-  useEffect(() => {
-    const hasExpiring = tableOrders.some(
+  const hasExpiringOrder = tableOrders.some(
       (o) => (o.status === 'paid' || o.status === 'cancelled') && typeof o.seconds_left === 'number'
     );
-    if (!hasExpiring) return;
+  useEffect(() => {
+    if (!hasExpiringOrder || sessionEnded) return;
 
     const timer = setInterval(() => {
-      setTableOrders((prev) => {
-        let changed = false;
-        const updated = [];
-        for (const o of prev) {
-          if ((o.status === 'paid' || o.status === 'cancelled') && typeof o.seconds_left === 'number') {
-            const nextSec = o.seconds_left - 1;
-            if (nextSec <= 0) {
-              changed = true;
-              continue; // Exclude expired card; auto-fades and is removed
-            }
-            changed = true;
-            updated.push({ ...o, seconds_left: nextSec });
-          } else {
-            updated.push(o);
+      let expired = false;
+      const updated = [];
+      for (const order of tableOrdersRef.current) {
+        const status = String(order.status || '').toLowerCase();
+        if ((status === 'paid' || status === 'cancelled') && typeof order.seconds_left === 'number') {
+          const nextSeconds = order.seconds_left - 1;
+          if (nextSeconds <= 0) {
+            expired = true;
+            continue;
           }
+          updated.push({ ...order, seconds_left: nextSeconds });
+        } else {
+          updated.push(order);
         }
-        return changed ? updated : prev;
+      }
+
+      tableOrdersRef.current = updated;
+      const hasOtherActiveOrders = updated.some((order) => {
+        const step = getOrderStep(order);
+        return step > 0 && step < 4;
       });
+      if (expired && !hasOtherActiveOrders) {
+        endCustomerSession();
+        return;
+      }
+      setTableOrders(updated);
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [tableOrders]);
+  }, [hasExpiringOrder, sessionEnded, endCustomerSession]);
 
   // Part C: Open Edit Order BottomSheet
+  /**
+   * Opens the edit sheet with the selected order's current items and notes.
+   */
   const openEditOrderSheet = (order) => {
     if (!order) return;
     setEditingOrder(order);
@@ -918,6 +1068,9 @@ export default function CustomerMenuPage() {
     setAddItemSearch('');
   };
 
+  /**
+   * Changes or removes an item in the customer's editable order.
+   */
   const handleEditItemQty = (index, delta) => {
     setEditItems((prev) => {
       const copy = [...prev];
@@ -933,6 +1086,9 @@ export default function CustomerMenuPage() {
     });
   };
 
+  /**
+   * Updates the note attached to an item in the editable order.
+   */
   const handleEditItemNote = (index, noteVal) => {
     setEditItems((prev) => {
       const copy = [...prev];
@@ -943,6 +1099,9 @@ export default function CustomerMenuPage() {
     });
   };
 
+  /**
+   * Adds a menu item to the order currently being edited.
+   */
   const handleAddItemToEdit = (menuItem) => {
     setEditItems((prev) => {
       const idx = prev.findIndex((i) => i.item_id === menuItem.id);
@@ -967,6 +1126,9 @@ export default function CustomerMenuPage() {
   };
 
   // Save changes via customer_edit_order
+  /**
+   * Persists the customer's permitted edits to an existing order.
+   */
   const handleSaveCustomerEdit = async () => {
     if (!editingOrder) return;
     const deviceKey = getDeviceKey(slug);
@@ -1015,6 +1177,9 @@ export default function CustomerMenuPage() {
   };
 
   // Cancel customer order via customer_cancel_order
+  /**
+   * Requests cancellation of a customer order and refreshes its status.
+   */
   const handleCancelCustomerOrder = async (order) => {
     if (!order) return;
     const deviceKey = getDeviceKey(slug);
@@ -1055,13 +1220,20 @@ export default function CustomerMenuPage() {
     return () => clearInterval(interval);
   }, [loadMenuData]);
 
+  /**
+   * Starts the welcome-banner dismissal animation.
+   */
   const dismissWelcome = () => {
     setWelcomeFading(true);
     setTimeout(() => setShowWelcome(false), 250);
   };
 
   // Cart operations
+  /**
+   * Adds an item only while this device still has a validated active table session.
+   */
   const addToCart = (item, qty = 1, note = '') => {
+    if (sessionEndedRef.current || !tableRef.current?.token) return;
     touchSession();
     setCart((prev) => {
       const existingIndex = prev.findIndex((i) => i.id === item.id && (i.note || '') === note);
@@ -1077,6 +1249,9 @@ export default function CustomerMenuPage() {
     setItemNote('');
   };
 
+  /**
+   * Updates or removes a line item in the current cart.
+   */
   const updateCartQty = (index, newQty) => {
     touchSession();
     if (newQty <= 0) {
@@ -1103,6 +1278,7 @@ export default function CustomerMenuPage() {
    * Submits an order only when the table token has resolved to an active table.
    */
   const handlePlaceOrder = async () => {
+    if (sessionEndedRef.current) return;
     if (tableError || !table?.token) {
       alert(isAmharic ? 'እባክዎን ትዕዛዝ ለማስገባት የጠረጴዛውን QR ኮድ ይቃኙ።' : 'Please scan a valid table QR code to place an order.');
       return;
@@ -1191,7 +1367,11 @@ export default function CustomerMenuPage() {
     return list;
   }, [items, activeCategory, searchQuery, lang, cafe?.default_language]);
 
+  /**
+   * Restores a prior order to the cart only for a currently active table session.
+   */
   const orderSameAgain = (savedItems = lastOrderItems) => {
+    if (sessionEndedRef.current || !tableRef.current?.token) return;
     const availableById = new Map(items.map((item) => [String(item.id), item]));
     let skipped = 0;
     const repeatCart = savedItems.reduce((rows, previous) => {
@@ -2052,6 +2232,7 @@ export default function CustomerMenuPage() {
                     {/* Round Add Button (Ordering mode only) */}
                     {table && (
                       <button
+                        disabled={sessionEnded}
                         onClick={(e) => {
                           e.stopPropagation();
                           addToCart(item, 1, '');
@@ -2161,6 +2342,7 @@ export default function CustomerMenuPage() {
                   fullWidth
                   size="lg"
                   variant="primary"
+                  disabled={sessionEnded}
                   onClick={() => addToCart(selectedItem, itemQty, itemNote)}
                 >
                   {isAmharic ? 'ወደ ትዕዛዝ ጨምር · ' : 'Add to Order · '}
@@ -2403,6 +2585,7 @@ export default function CustomerMenuPage() {
             size="lg"
             variant="primary"
             loading={submittingOrder}
+            disabled={sessionEnded || !table?.token}
             onClick={handlePlaceOrder}
             iconRight={<ArrowRight size={18} />}
           >
@@ -2524,6 +2707,7 @@ export default function CustomerMenuPage() {
                     <Button
                       size="sm"
                       variant="secondary"
+                      disabled={sessionEnded}
                       style={{ minHeight: 44, marginTop: 10 }}
                       onClick={() => {
                         setMyOrdersOpen(false);
@@ -2594,6 +2778,7 @@ export default function CustomerMenuPage() {
                     <Button
                       size="sm"
                       variant="secondary"
+                      disabled={sessionEnded}
                       style={{ minHeight: 44, marginTop: 10 }}
                       onClick={() => {
                         setMyOrdersOpen(false);
@@ -3236,6 +3421,21 @@ export default function CustomerMenuPage() {
           </div>
         </div>
       )}
+      <Modal
+        isOpen={sessionEnded && sessionEndNoticeOpen}
+        onClose={() => setSessionEndNoticeOpen(false)}
+        title={isAmharic ? 'የትዕዛዝ ክፍለ ጊዜዎ አብቅቷል' : 'Your session has ended'}
+        maxWidth={480}
+      >
+        <p style={{ color: 'var(--color-muted)', fontSize: 15, lineHeight: 1.6, margin: '0 0 20px' }}>
+          {isAmharic
+            ? 'ሌላ ነገር ለማዘዝ እባክዎ በጠረጴዛዎ ላይ ያለውን QR ኮድ እንደገና ይቃኙ።'
+            : 'Your session has ended. Please scan the QR code on your table again to order something else.'}
+        </p>
+        <Button fullWidth size="lg" variant="primary" onClick={() => setSessionEndNoticeOpen(false)}>
+          {isAmharic ? 'ሜኑውን ይመልከቱ' : 'Continue viewing menu'}
+        </Button>
+      </Modal>
     </div>
   );
 }

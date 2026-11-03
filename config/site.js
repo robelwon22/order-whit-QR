@@ -14,10 +14,10 @@ export const siteConfig = {
     am: 'ደንበኞች ስካን ያደርጋሉ፣ በመረጡት ቋንቋ ይመለከታሉ፣ ከጠረጴዛቸው ያዛሉ። ባርቴንደርዎ እያንዳንዱን ትዕዛዝ ወዲያውኑ ይቀበላል።',
   },
   contact: {
-    phone: '+251 91 123 4567',
+    phone: '+251922680480',
     telegram: 'https://t.me/bunaqr_support',
     telegramHandle: '@bunaqr_support',
-    email: 'contact@bunaqr.com',
+    email: 'robelwon09@gmail.com',
     location: 'Addis Ababa, Ethiopia',
   },
   pricing: {

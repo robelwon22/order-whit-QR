@@ -33,10 +33,15 @@ import {
   Coffee,
   ArrowRight,
   TrendingUp,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 const RESERVED_SLUGS = ['admin', 'login', 'bartender', 'super', 'api'];
 
+/**
+ * Renders the super-admin dashboard for cafe and staff account management.
+ */
 export default function SuperAdminPage() {
   const { staff, loading: authLoading, logout } = useStaff(['super_admin']);
   const { t, isAmharic } = useI18n();
@@ -60,6 +65,12 @@ export default function SuperAdminPage() {
   const [loadingStaff, setLoadingStaff] = useState(false);
   const [credentialsModal, setCredentialsModal] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
+  const [resetPasswordStaff, setResetPasswordStaff] = useState(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [confirmResetPassword, setConfirmResetPassword] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [resetPasswordErrors, setResetPasswordErrors] = useState({});
+  const [savingResetPassword, setSavingResetPassword] = useState(false);
 
   // New Cafe Form
   const [newName, setNewName] = useState('');
@@ -87,13 +98,18 @@ export default function SuperAdminPage() {
   // Edit Cafe State
   const [editForm, setEditForm] = useState(null);
   const [updating, setUpdating] = useState(false);
-  const [tempPassResult, setTempPassResult] = useState(null);
 
+  /**
+   * Reads the current Supabase access token for a super-admin API request.
+   */
   const getAuthToken = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token || '';
   };
 
+  /**
+   * Loads cafes and overview metrics for the super-admin dashboard.
+   */
   const loadData = useCallback(async () => {
     try {
       setLoadingData(true);
@@ -119,6 +135,9 @@ export default function SuperAdminPage() {
     }
   }, [staff, loadData]);
 
+  /**
+   * Updates the new cafe name and derives its slug until manually edited.
+   */
   const handleNameChange = (name) => {
     setNewName(name);
     if (!slugManuallyEdited) {
@@ -130,13 +149,14 @@ export default function SuperAdminPage() {
     }
   };
 
+  /**
+   * Generates a random password using the browser's cryptographic random source.
+   */
   const generateRandomPassword = () => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
-    let pass = 'BunaPass!';
-    for (let i = 0; i < 6; i++) {
-      pass += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return pass;
+    const randomValues = new Uint32Array(20);
+    crypto.getRandomValues(randomValues);
+    return Array.from(randomValues, (value) => chars[value % chars.length]).join('');
   };
 
   // Create Cafe
@@ -215,8 +235,6 @@ export default function SuperAdminPage() {
       business_category: c.settings?.business_category || 'bakery',
       business_what: c.settings?.business_what || '',
     });
-    setTempPassResult(null);
-
     try {
       setLoadingStaff(true);
       const token = await getAuthToken();
@@ -263,6 +281,9 @@ export default function SuperAdminPage() {
   };
 
   // Toggle Suspend / Reactivate
+  /**
+   * Opens a confirmation dialog to suspend or reactivate a cafe.
+   */
   const handleToggleActive = (c) => {
     const isActivating = !c.active;
     const actionText = isActivating ? 'Reactivate' : 'Suspend';
@@ -339,31 +360,83 @@ export default function SuperAdminPage() {
     }
   };
 
-  // Reset Staff Member Password
-  const handleResetStaffPassword = async (staffMember) => {
-    const newPass = generateRandomPassword();
+  /**
+   * Opens the password-reset dialog for the selected staff member.
+   */
+  const handleResetStaffPassword = (staffMember) => {
+    setResetPasswordStaff(staffMember);
+    setResetPassword('');
+    setConfirmResetPassword('');
+    setResetPasswordErrors({});
+    setShowResetPassword(false);
+  };
+
+  /**
+   * Clears password fields and closes the staff password-reset dialog.
+   */
+  const closeResetPasswordModal = () => {
+    setResetPasswordStaff(null);
+    setResetPassword('');
+    setConfirmResetPassword('');
+    setResetPasswordErrors({});
+    setShowResetPassword(false);
+  };
+
+  /**
+   * Fills both password fields with a generated strong value.
+   */
+  const handleGenerateResetPassword = () => {
+    const generated = generateRandomPassword();
+    setResetPassword(generated);
+    setConfirmResetPassword(generated);
+    setResetPasswordErrors({});
+  };
+
+  /**
+   * Validates and saves the selected password using a fresh super-admin auth token.
+   */
+  const saveStaffPassword = async () => {
+    const errors = {};
+    if (resetPassword.length < 8) errors.password = 'Password must be at least 8 characters.';
+    if (resetPassword !== confirmResetPassword) errors.confirm = 'Passwords do not match.';
+    setResetPasswordErrors(errors);
+    if (Object.keys(errors).length || !resetPasswordStaff) return;
+
+    setSavingResetPassword(true);
     try {
-      const token = await getAuthToken();
-      const res = await fetch(`/api/staff/${staffMember.user_id}/reset-password`, {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        showToast('Your session expired. Please sign in again.', 'error');
+        return;
+      }
+      const res = await fetch(`/api/staff/${resetPasswordStaff.user_id}/reset-password`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ password: newPass }),
+        body: JSON.stringify({ password: resetPassword }),
       });
       const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-
-      setTempPassResult({
-        name: staffMember.full_name,
-        email: staffMember.email,
-        password: newPass,
-      });
+      if (!res.ok || !data.success) {
+        console.error('Staff password reset failed:', { status: res.status, error: data.error });
+        throw new Error(data.error || 'Password reset failed.');
+      }
       showToast('Password reset.', 'success');
+      closeResetPasswordModal();
     } catch (e) {
       showToast(e.message || 'Password reset failed', 'error');
+    } finally {
+      setSavingResetPassword(false);
     }
+  };
+
+  /**
+   * Prevents form navigation and submits the validated password reset.
+   */
+  const handleResetPasswordSubmit = (event) => {
+    event.preventDefault();
+    saveStaffPassword();
   };
 
   // Filter cafes
@@ -867,23 +940,62 @@ export default function SuperAdminPage() {
               )}
             </div>
 
-            {tempPassResult && (
-              <div
-                style={{
-                  backgroundColor: '#FEF9C3',
-                  padding: 14,
-                  borderRadius: 'var(--radius)',
-                  border: '1px solid #F59E0B',
-                  fontSize: 13,
-                }}
-              >
-                <div>New password for <b>{tempPassResult.name}</b>:</div>
-                <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 15, marginTop: 4 }}>
-                  {tempPassResult.password}
-                </div>
-              </div>
-            )}
           </div>
+        </Modal>
+      )}
+
+      {resetPasswordStaff && (
+        <Modal
+          isOpen={!!resetPasswordStaff}
+          onClose={closeResetPasswordModal}
+          title="Reset staff password"
+          subtitle={`Choose a new password for ${resetPasswordStaff.full_name}.`}
+        >
+          <form onSubmit={handleResetPasswordSubmit}>
+            <Input
+              label="New password"
+              type={showResetPassword ? 'text' : 'password'}
+              value={resetPassword}
+              onChange={(event) => setResetPassword(event.target.value)}
+              error={resetPasswordErrors.password}
+              autoComplete="new-password"
+            />
+            <Input
+              label="Confirm password"
+              type={showResetPassword ? 'text' : 'password'}
+              value={confirmResetPassword}
+              onChange={(event) => setConfirmResetPassword(event.target.value)}
+              error={resetPasswordErrors.confirm}
+              autoComplete="new-password"
+              rightElement={(
+                <button
+                  type="button"
+                  aria-label={showResetPassword ? 'Hide passwords' : 'Show passwords'}
+                  onClick={() => setShowResetPassword((visible) => !visible)}
+                  style={{ border: 0, background: 'transparent', color: 'var(--color-muted)', cursor: 'pointer' }}
+                >
+                  {showResetPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                </button>
+              )}
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleGenerateResetPassword}
+              >
+                Generate strong password
+              </Button>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <Button type="button" variant="ghost" onClick={closeResetPasswordModal} disabled={savingResetPassword}>
+                  Cancel
+                </Button>
+                <Button type="submit" loading={savingResetPassword}>
+                  Save new password
+                </Button>
+              </div>
+            </div>
+          </form>
         </Modal>
       )}
 

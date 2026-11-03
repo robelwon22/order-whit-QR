@@ -30,6 +30,9 @@ import {
   Coffee,
 } from 'lucide-react';
 
+/**
+ * Renders the public landing page and its interactive product demo.
+ */
 export default function LandingPage() {
   const { lang, setLang, isAmharic } = useI18n();
   const [openFaq, setOpenFaq] = useState(0);
@@ -51,6 +54,9 @@ export default function LandingPage() {
     ],
   };
 
+  /**
+   * Adds one demo item to the landing-page cart.
+   */
   const handleDemoAdd = (item) => {
     setDemoCart((prev) => {
       const existing = prev.find((i) => i.id === item.id);
@@ -63,6 +69,9 @@ export default function LandingPage() {
 
   const demoCartTotal = demoCart.reduce((sum, i) => sum + i.price * i.qty, 0);
 
+  /**
+   * Selects the current-language copy for a landing-page message.
+   */
   const t = (obj) => {
     if (!obj) return '';
     return obj[lang] || obj.en || '';
@@ -128,11 +137,6 @@ export default function LandingPage() {
                 {isAmharic ? 'የሰራተኛ መግቢያ' : 'Staff login'}
               </Button>
             </Link>
-            <a href={`tel:${siteConfig.contact.phone}`}>
-              <Button variant="primary" size="sm">
-                {isAmharic ? 'ጀምር' : 'Get started'}
-              </Button>
-            </a>
           </div>
         </div>
       </header>
@@ -184,16 +188,11 @@ export default function LandingPage() {
           </p>
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 36 }}>
-            <a href={`tel:${siteConfig.contact.phone}`}>
+            <Link href="/login">
               <Button size="lg" variant="primary" iconRight={<ArrowRight size={18} />}>
-                {isAmharic ? 'የካፌዎን ሜኑ ዛሬውኑ ይጀምሩ' : 'Get started today'}
+                {isAmharic ? 'ሰራተኛ ግባ' : 'Staff Log in'}
               </Button>
-            </a>
-            <a href="#demo">
-              <Button size="lg" variant="secondary" icon={<Smartphone size={18} />}>
-                {isAmharic ? 'የሙከራ ሜኑ ይመልከቱ' : 'See a demo menu'}
-              </Button>
-            </a>
+            </Link>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -1308,6 +1307,11 @@ export default function LandingPage() {
                 {siteConfig.contact.phone}
               </Button>
             </a>
+            <a href={`mailto:${siteConfig.contact.email}`}>
+              <Button size="lg" variant="secondary" icon={<Mail size={18} />}>
+                {siteConfig.contact.email}
+              </Button>
+            </a>
             <a href={siteConfig.contact.telegram} target="_blank" rel="noreferrer">
               <Button size="lg" variant="secondary" icon={<Send size={18} />}>
                 Telegram: {siteConfig.contact.telegramHandle}
@@ -1344,6 +1348,10 @@ export default function LandingPage() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 20, fontSize: 13 }}>
+            <a href={`tel:${siteConfig.contact.phone}`} style={{ color: 'var(--color-muted)' }}>
+              {siteConfig.contact.phone}
+            </a>
+            <span style={{ color: 'var(--color-line)' }}>•</span>
             <a href={`mailto:${siteConfig.contact.email}`} style={{ color: 'var(--color-muted)' }}>
               {siteConfig.contact.email}
             </a>
