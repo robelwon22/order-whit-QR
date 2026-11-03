@@ -1034,8 +1034,11 @@ export default function CustomerMenuPage() {
   }, [cart]);
 
   // Send Order
+  /**
+   * Submits an order only when the table token has resolved to an active table.
+   */
   const handlePlaceOrder = async () => {
-    if (!table?.token) {
+    if (tableError || !table?.token) {
       alert(isAmharic ? 'እባክዎን ትዕዛዝ ለማስገባት የጠረጴዛውን QR ኮድ ይቃኙ።' : 'Please scan a valid table QR code to place an order.');
       return;
     }
@@ -1204,6 +1207,34 @@ export default function CustomerMenuPage() {
           <Skeleton height={88} borderRadius={16} />
           <Skeleton height={88} borderRadius={16} />
           <Skeleton height={88} borderRadius={16} />
+        </div>
+      </div>
+    );
+  }
+
+  // Stop inactive and invalid table QR scans before showing the customer menu.
+  if (tableError) {
+    return (
+      <div
+        role="alert"
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          padding: 24,
+          background: 'var(--bg)',
+        }}
+      >
+        <div className="card" style={{ maxWidth: 420, textAlign: 'center', padding: 28 }}>
+          <AlertCircle size={32} color="var(--color-terracotta)" style={{ margin: '0 auto 12px' }} />
+          <h1 style={{ fontSize: 24, marginBottom: 8 }}>
+            {isAmharic ? 'ይህ ጠረጴዛ ንቁ አይደለም' : 'This table is inactive.'}
+          </h1>
+          <p style={{ color: 'var(--color-muted)' }}>
+            {isAmharic
+              ? 'እባክዎ ሰራተኛን ያነጋግሩ ወይም አዲስ QR ኮድ ይቃኙ።'
+              : 'Please ask the staff to activate this table or scan its current QR code.'}
+          </p>
         </div>
       </div>
     );

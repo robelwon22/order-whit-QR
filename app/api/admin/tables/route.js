@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { randomBytes } from 'node:crypto';
 import { verifyStaffSession, getServiceRoleClient } from '../../../../lib/supabaseServer';
 
 // GET /api/admin/tables?cafe_id=... — list tables for a cafe
@@ -36,7 +37,9 @@ export async function GET(req) {
   }
 }
 
-// POST /api/admin/tables — bulk-add tables
+/**
+ * Creates tables with independent, cryptographically random QR tokens.
+ */
 export async function POST(req) {
   try {
     const { staff } = await verifyStaffSession(req, ['cafe_admin', 'super_admin']);
@@ -84,6 +87,7 @@ export async function POST(req) {
         rows.push({
           cafe_id: targetCafeId,
           name,
+          token: randomBytes(32).toString('base64url'),
           sort_order: maxOrder + rows.length + 1,
           active: true,
         });

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { useStaff } from '../../../lib/useStaff';
 import { useToast } from '../../../components/ui/Toast';
@@ -12,7 +12,7 @@ import { Modal } from '../../../components/ui/Modal';
 import { Badge, EmptyState, Skeleton, ConfirmDialog } from '../../../components/ui/Badge';
 import { getCafeLogoHtml } from '../../../components/ui/CafeLogo';
 import { TableQrCode } from '../../../components/ui/TableQrCode';
-import { getSiteUrl, isLocalUrl } from '../../../lib/siteUrl';
+import { getSiteUrl, isLocalUrl, isValidSiteUrl } from '../../../lib/siteUrl';
 import {
   buildTableQrUrl,
   generateQRSvg,
@@ -36,10 +36,16 @@ import {
   Share2,
 } from 'lucide-react';
 
-function authHeader(session) {
-  return { Authorization: 'Bearer ' + session.access_token };
+/**
+ * Creates the authorization header used by staff table API requests.
+ */
+function authHeader(accessToken) {
+  return { Authorization: 'Bearer ' + accessToken };
 }
 
+/**
+ * Manages the cafe's tables, QR links, diagnostics, and printable QR layouts.
+ */
 export default function TablesAdminPage() {
   const { staff, cafe, cafes, setCafe, loading: authLoading, logout } = useStaff(['cafe_admin', 'super_admin']);
   const { showToast } = useToast();
@@ -66,19 +72,12 @@ export default function TablesAdminPage() {
   // Print layout choice: 'a4-grid' (6 cards) or 'tent' (table tent)
   const [printLayout, setPrintLayout] = useState('a4-grid');
 
-  const [siteUrl, setSiteUrl] = useState(
-    process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '') || '',
-  );
+  const siteUrl = getSiteUrl();
   const isLocalhostWarning = isLocalUrl(siteUrl);
   const isSiteUrlMissing = !siteUrl;
-  const hasDomainIssue = isLocalhostWarning || isSiteUrlMissing;
-  const qrModalUrl = buildTableQrUrl(activeCafe?.slug, qrModalTable?.token, siteUrl);
-
-  useEffect(() => {
-    const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-    if (!configuredUrl && process.env.NODE_ENV === 'production') return;
-    setSiteUrl(getSiteUrl());
-  }, []);
+  const isSiteUrlValid = isValidSiteUrl(siteUrl);
+  const hasDomainIssue = !isSiteUrlValid;
+  const qrModalUrl = buildTableQrUrl(activeCafe?.slug, qrModalTable?.token);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => setSession(s));
@@ -89,12 +88,20 @@ export default function TablesAdminPage() {
   }, [cafe, activeCafe]);
 
   // Fetch Tables
+  const sessionAccessToken = session?.access_token;
+  const activeCafeId = activeCafe?.id;
+  const automaticFetchKey = `${sessionAccessToken || ''}:${activeCafeId || ''}`;
+  const lastAutomaticFetchKey = useRef('');
+
+  /**
+   * Loads the table list for the selected cafe using the current staff session.
+   */
   const fetchTables = useCallback(async () => {
-    if (!session || !activeCafe) return;
+    if (!sessionAccessToken || !activeCafeId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/tables?cafe_id=${activeCafe.id}`, {
-        headers: authHeader(session),
+      const res = await fetch(`/api/admin/tables?cafe_id=${activeCafeId}`, {
+        headers: authHeader(sessionAccessToken),
       });
       const json = await res.json();
       if (json.success) {
@@ -107,13 +114,17 @@ export default function TablesAdminPage() {
     } finally {
       setLoading(false);
     }
-  }, [session, activeCafe, showToast]);
+  }, [sessionAccessToken, activeCafeId, showToast]);
 
   useEffect(() => {
+    if (!sessionAccessToken || !activeCafeId || lastAutomaticFetchKey.current === automaticFetchKey) return;
+    lastAutomaticFetchKey.current = automaticFetchKey;
     fetchTables();
-  }, [fetchTables]);
+  }, [automaticFetchKey, activeCafeId, fetchTables, sessionAccessToken]);
 
-  // Bulk Add Tables
+  /**
+   * Adds tables to the selected cafe and reloads its table list.
+   */
   const handleAddTables = async (e) => {
     e.preventDefault();
     if (!activeCafe) return;
@@ -152,7 +163,9 @@ export default function TablesAdminPage() {
     }
   };
 
-  // Toggle or Update Table
+  /**
+   * Saves table changes and updates the matching row in local state.
+   */
   const handleUpdate = async (id, updates) => {
     try {
       const res = await fetch(`/api/admin/tables/${id}`, {
@@ -175,7 +188,9 @@ export default function TablesAdminPage() {
     }
   };
 
-  // Delete Table
+  /**
+   * Deletes the table currently selected in the confirmation dialog.
+   */
   const handleDelete = async () => {
     if (!deleteConfirmTable) return;
     try {
@@ -196,7 +211,9 @@ export default function TablesAdminPage() {
     }
   };
 
-  // Reset QR Token
+  /**
+   * Regenerates a table token and refreshes the matching table row.
+   */
   const handleResetToken = async (id) => {
     try {
       const res = await fetch(`/api/admin/tables/${id}/reset-token`, {
@@ -219,26 +236,35 @@ export default function TablesAdminPage() {
   };
 
   // Test Scan Diagnostics
+  /**
+   * Opens the exact QR destination and checks that its token resolves correctly.
+   */
   const handleRunTestScan = async (tbl) => {
     setTestScanTable(tbl);
     setTestingScan(true);
     setTestScanResults(null);
 
-    const targetUrl = buildTableQrUrl(activeCafe.slug, tbl.token, siteUrl);
-    if (!targetUrl || isLocalUrl(siteUrl)) {
+    const targetUrl = buildTableQrUrl(activeCafe?.slug, tbl.token);
+    if (!targetUrl || !isSiteUrlValid) {
       setTestScanResults({
         targetUrl,
         cafeFound: false,
         tableFound: false,
         tableActive: false,
         orderingEnabled: false,
-        errorDetail: isSiteUrlMissing
+        errorDetail: !tbl.token
+          ? 'No token is assigned to this table. Regenerate its token before testing the QR code.'
+          : isSiteUrlMissing
           ? 'NEXT_PUBLIC_SITE_URL is not configured. Set it to https://order-whit-qr.vercel.app and redeploy.'
-          : 'Test Scan is blocked because the site URL points to a local network address.',
+          : isLocalhostWarning
+            ? 'Test Scan is blocked because the site URL points to a local network address.'
+            : 'NEXT_PUBLIC_SITE_URL must be a valid public HTTPS origin.',
       });
       setTestingScan(false);
       return;
     }
+
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
 
     // Diagnostics checks
     const checks = {
@@ -291,35 +317,44 @@ export default function TablesAdminPage() {
   };
 
   // Print All QR Codes (Supports A4 Grid of 6 and Table Tent layouts)
+  /**
+   * Builds a print-only document whose table URLs match the modal QR destinations.
+   */
   const handlePrintAll = (layout = 'a4-grid') => {
-    if (isLocalhostWarning) {
-      showToast('Printing is blocked because NEXT_PUBLIC_SITE_URL points to a local network address.', 'error');
-      return;
-    }
-    if (isSiteUrlMissing) {
-      showToast('NEXT_PUBLIC_SITE_URL is missing. Set it to https://order-whit-qr.vercel.app and redeploy.', 'error');
+    if (!isSiteUrlValid) {
+      if (isLocalhostWarning) {
+        showToast('Printing is blocked because NEXT_PUBLIC_SITE_URL points to a local network address.', 'error');
+      } else {
+        showToast('Set NEXT_PUBLIC_SITE_URL to a valid public HTTPS URL before printing.', 'error');
+      }
       return;
     }
 
-    const activeTables = tables.filter((t) => t.active);
+    const activeTables = tables.filter((t) => t.active && t.token);
     if (activeTables.length === 0) {
-      showToast('No active tables to print.', 'error');
+      showToast('No active tables with QR tokens are available to print.', 'error');
       return;
     }
+    if (tables.some((t) => t.active && !t.token)) {
+      showToast('Tables without tokens were skipped. Regenerate their tokens before printing.', 'error');
+    }
 
-    const cardsHtml = activeTables
-      .map((t) => {
-        const url = buildTableQrUrl(activeCafe.slug, t.token, siteUrl);
-        const svg = generateQRSvg(url, 240, 4);
-        const logoHtml = getCafeLogoHtml({
-          logoUrl: activeCafe.logo_url,
-          name: activeCafe.name,
-          brandColor: activeCafe.theme?.primary || '#6F4E37',
-          size: 36,
-        });
+    let cardsHtml;
+    try {
+      cardsHtml = activeTables
+        .map((t) => {
+          const url = buildTableQrUrl(activeCafe.slug, t.token);
+          if (!url) return '';
+          const svg = generateQRSvg(url, 240, 4);
+          const logoHtml = getCafeLogoHtml({
+            logoUrl: activeCafe.logo_url,
+            name: activeCafe.name,
+            brandColor: activeCafe.theme?.primary || '#6F4E37',
+            size: 36,
+          });
 
-        if (layout === 'tent') {
-          return `
+          if (layout === 'tent') {
+            return `
             <div class="tent-card">
               <div class="tent-half">
                 <div class="cafe-header">
@@ -344,10 +379,10 @@ export default function TablesAdminPage() {
               </div>
             </div>
           `;
-        }
+          }
 
-        // Default: A4 grid of 6 cards with cut marks
-        return `
+          // Default: A4 grid of 6 cards with cut marks
+          return `
           <div class="card-wrap">
             <div class="cut-mark top-left"></div>
             <div class="cut-mark top-right"></div>
@@ -366,8 +401,12 @@ export default function TablesAdminPage() {
             </div>
           </div>
         `;
-      })
-      .join('');
+        })
+        .join('');
+    } catch (error) {
+      showToast(`QR printing failed: ${error.message || 'Unable to generate a QR code.'}`, 'error');
+      return;
+    }
 
     const html = `
       <!DOCTYPE html>
@@ -388,6 +427,7 @@ export default function TablesAdminPage() {
             position: relative;
             padding: 8px;
             page-break-inside: avoid;
+            break-inside: avoid;
           }
           .qr-card {
             border: 2.5px solid #2B1D14;
@@ -396,6 +436,8 @@ export default function TablesAdminPage() {
             text-align: center;
             background: #FFFDF9;
             box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            page-break-inside: avoid;
+            break-inside: avoid;
           }
           .cafe-header {
             display: flex;
@@ -440,6 +482,7 @@ export default function TablesAdminPage() {
             padding: 16px;
             margin-bottom: 24mm;
             page-break-inside: avoid;
+            break-inside: avoid;
             background: #FFF;
           }
           .tent-half { text-align: center; padding: 24px 16px; }
@@ -455,6 +498,12 @@ export default function TablesAdminPage() {
           }
           .tagline { font-size: 14px; font-weight: 700; color: #6F4E37; margin-top: 6px; }
           .tagline-en { font-size: 12px; color: #7A6A5C; }
+          @media print {
+            html, body { width: 100%; background: #fff; }
+            .a4-grid, .tent-container { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            .qr-box, .qr-box svg { background: #fff; }
+            .card-wrap, .qr-card, .tent-card, .tent-half { page-break-inside: avoid; break-inside: avoid; }
+          }
         </style>
       </head>
       <body>
@@ -466,6 +515,10 @@ export default function TablesAdminPage() {
     `;
 
     const win = window.open('', '_blank');
+    if (!win) {
+      showToast('The print window was blocked. Allow pop-ups and try again.', 'error');
+      return;
+    }
     win.document.write(html);
     win.document.close();
     win.focus();
@@ -531,11 +584,13 @@ export default function TablesAdminPage() {
                       ? 'QR Domain Warning (Localhost Detected)'
                       : isSiteUrlMissing
                         ? 'QR Domain Not Configured'
-                        : 'QR Code System Healthy'}
+                        : isSiteUrlValid
+                          ? 'QR Code System Healthy'
+                          : 'QR Domain Invalid'}
                   </h2>
-                  <Badge variant={isLocalhostWarning || isSiteUrlMissing ? 'danger' : 'success'} size="sm" dot>
-                    {isLocalhostWarning ? 'Blocked' : isSiteUrlMissing ? 'Not Configured' : 'Production Ready'}
-                  </Badge>
+                    <Badge variant={hasDomainIssue ? 'danger' : 'success'} size="sm" dot>
+                      {isLocalhostWarning ? 'Blocked' : isSiteUrlMissing ? 'Not Configured' : isSiteUrlValid ? 'Production Ready' : 'Invalid'}
+                    </Badge>
                 </div>
                 <p
                   style={{
@@ -549,7 +604,9 @@ export default function TablesAdminPage() {
                     ? 'QR codes cannot be printed with a local or private-network URL. Set NEXT_PUBLIC_SITE_URL in Vercel to https://order-whit-qr.vercel.app.'
                     : isSiteUrlMissing
                       ? 'NEXT_PUBLIC_SITE_URL is missing. Set it in Vercel to https://order-whit-qr.vercel.app and redeploy. QR codes cannot be generated until it is configured.'
-                      : `Live Site URL: ${siteUrl} · ${activeCount} active tables ready for instant ordering.`}
+                      : isSiteUrlValid
+                        ? `Live Site URL: ${siteUrl} · ${activeCount} active tables ready for instant ordering.`
+                        : 'NEXT_PUBLIC_SITE_URL must be a public HTTPS origin without a path or query string.'}
                 </p>
               </div>
             </div>
@@ -558,7 +615,7 @@ export default function TablesAdminPage() {
               <Button
                 variant={isLocalhostWarning ? 'danger' : 'primary'}
                 icon={<Printer size={16} />}
-                disabled={isLocalhostWarning || activeCount === 0}
+                disabled={!isSiteUrlValid || activeCount === 0 || !tables.some((table) => table.active && table.token)}
                 onClick={() => handlePrintAll('a4-grid')}
               >
                 Print All (A4 Grid)
@@ -566,7 +623,7 @@ export default function TablesAdminPage() {
               <Button
                 variant="secondary"
                 icon={<Printer size={16} />}
-                disabled={isLocalhostWarning || activeCount === 0}
+                disabled={!isSiteUrlValid || activeCount === 0 || !tables.some((table) => table.active && table.token)}
                 onClick={() => handlePrintAll('tent')}
               >
                 Print Table Tents
@@ -678,7 +735,7 @@ export default function TablesAdminPage() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {tables.map((tbl) => {
-                const qrUrl = buildTableQrUrl(activeCafe?.slug, tbl.token, siteUrl);
+                const qrUrl = buildTableQrUrl(activeCafe?.slug, tbl.token);
                 return (
                   <div
                     key={tbl.id}
@@ -732,8 +789,13 @@ export default function TablesAdminPage() {
                             marginTop: 2,
                           }}
                         >
-                          Token: {tbl.token ? tbl.token.slice(0, 10) + '…' : '—'}
+                          {tbl.token ? `Token: ${tbl.token.slice(0, 10)}…` : 'No token'}
                         </div>
+                        {!tbl.token && (
+                          <Button size="sm" variant="secondary" onClick={() => handleResetToken(tbl.id)}>
+                            Regenerate token
+                          </Button>
+                        )}
                       </div>
                     </div>
 
@@ -960,7 +1022,11 @@ export default function TablesAdminPage() {
           subtitle={activeCafe?.name}
         >
           <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 18 }}>
-                <TableQrCode url={qrModalUrl} />
+                <TableQrCode
+                  url={qrModalUrl}
+                  hasToken={Boolean(qrModalTable.token)}
+                  onRegenerate={() => handleResetToken(qrModalTable.id)}
+                />
 
                 <div
                   style={{

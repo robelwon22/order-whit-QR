@@ -6,7 +6,7 @@ import { generateQRSvgAsync } from '../../lib/qr';
 /**
  * Generates and displays a table QR code with explicit loading and error states.
  */
-export function TableQrCode({ url }) {
+export function TableQrCode({ url, hasToken = true, onRegenerate }) {
   const [svg, setSvg] = useState('');
   const [error, setError] = useState('');
 
@@ -20,8 +20,9 @@ export function TableQrCode({ url }) {
     async function generate() {
       setSvg('');
       setError('');
+      if (!hasToken) return;
       if (!url) {
-        setError('Set NEXT_PUBLIC_SITE_URL to https://order-whit-qr.vercel.app to generate QR codes.');
+        setError('Set NEXT_PUBLIC_SITE_URL to a valid public HTTPS site URL to generate QR codes.');
         return;
       }
 
@@ -39,7 +40,7 @@ export function TableQrCode({ url }) {
     return () => {
       active = false;
     };
-  }, [url]);
+  }, [hasToken, url]);
 
   const containerStyle = {
     backgroundColor: '#FFFFFF',
@@ -49,11 +50,26 @@ export function TableQrCode({ url }) {
     display: 'inline-flex',
     alignSelf: 'center',
     boxShadow: 'var(--shadow-sm)',
-    minWidth: 240,
-    minHeight: 240,
+    width: 280,
+    height: 280,
+    boxSizing: 'border-box',
     alignItems: 'center',
     justifyContent: 'center',
   };
+
+  if (!hasToken) {
+    return (
+      <div role="alert" style={{ ...containerStyle, flexDirection: 'column', gap: 12 }}>
+        <strong>No token</strong>
+        <span>This table needs a new QR token before a code can be generated.</span>
+        {onRegenerate && (
+          <button type="button" onClick={onRegenerate}>
+            Regenerate token
+          </button>
+        )}
+      </div>
+    );
+  }
 
   if (error) {
     return (
