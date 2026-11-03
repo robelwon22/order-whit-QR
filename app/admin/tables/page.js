@@ -44,6 +44,27 @@ function authHeader(accessToken) {
 }
 
 /**
+ * Parses an admin API response and reports server-side failures with their status and body.
+ */
+async function readApiResponse(response, fallbackMessage) {
+  let body;
+
+  try {
+    body = await response.json();
+  } catch (error) {
+    console.error('Admin API returned an unreadable response:', response.status, error);
+    throw new Error(`${fallbackMessage} (HTTP ${response.status})`);
+  }
+
+  if (!response.ok || !body || typeof body !== 'object' || body.success === false) {
+    console.error('Admin API request failed:', response.status, body);
+    throw new Error(body?.error || body?.message || `${fallbackMessage} (HTTP ${response.status})`);
+  }
+
+  return body;
+}
+
+/**
  * Manages the cafe's tables, QR links, diagnostics, and printable QR layouts.
  */
 export default function TablesAdminPage() {
@@ -79,6 +100,25 @@ export default function TablesAdminPage() {
   const hasDomainIssue = !isSiteUrlValid;
   const qrModalUrl = buildTableQrUrl(activeCafe?.slug, qrModalTable?.token);
 
+  /**
+   * Retrieves the current Supabase access token before an admin API request.
+   */
+  const getFreshAuthHeader = useCallback(async () => {
+    const { data: { session: currentSession }, error } = await supabase.auth.getSession();
+    if (error) {
+      console.error('Unable to retrieve the current staff session:', error);
+      showToast('Unable to verify your sign-in. Please sign in again.', 'error');
+      return null;
+    }
+
+    if (!currentSession?.access_token) {
+      showToast('Your session has expired. Please sign in again.', 'error');
+      return null;
+    }
+
+    return authHeader(currentSession.access_token);
+  }, [showToast]);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => setSession(s));
   }, []);
@@ -100,21 +140,20 @@ export default function TablesAdminPage() {
     if (!sessionAccessToken || !activeCafeId) return;
     setLoading(true);
     try {
+      const headers = await getFreshAuthHeader();
+      if (!headers) return;
+
       const res = await fetch(`/api/admin/tables?cafe_id=${activeCafeId}`, {
-        headers: authHeader(sessionAccessToken),
+        headers,
       });
-      const json = await res.json();
-      if (json.success) {
-        setTables(json.tables || []);
-      } else {
-        showToast(json.error || 'Failed to load tables.', 'error');
-      }
+      const json = await readApiResponse(res, 'Failed to load tables.');
+      setTables(json.tables || []);
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
       setLoading(false);
     }
-  }, [sessionAccessToken, activeCafeId, showToast]);
+  }, [sessionAccessToken, activeCafeId, getFreshAuthHeader, showToast]);
 
   useEffect(() => {
     if (!sessionAccessToken || !activeCafeId || lastAutomaticFetchKey.current === automaticFetchKey) return;
@@ -139,9 +178,12 @@ export default function TablesAdminPage() {
 
     setAdding(true);
     try {
+      const headers = await getFreshAuthHeader();
+      if (!headers) return;
+
       const res = await fetch('/api/admin/tables', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeader(session) },
+        headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({
           count: n,
           prefix: addPrefix,
@@ -149,13 +191,9 @@ export default function TablesAdminPage() {
           cafe_id: activeCafe.id,
         }),
       });
-      const json = await res.json();
-      if (json.success) {
-        showToast(`Added ${json.count} table${json.count !== 1 ? 's' : ''}.`, 'success');
-        fetchTables();
-      } else {
-        showToast(json.error || 'Failed to add tables.', 'error');
-      }
+      const json = await readApiResponse(res, 'Failed to add tables.');
+      showToast(`Added ${json.count} table${json.count !== 1 ? 's' : ''}.`, 'success');
+      fetchTables();
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -168,20 +206,18 @@ export default function TablesAdminPage() {
    */
   const handleUpdate = async (id, updates) => {
     try {
+      const headers = await getFreshAuthHeader();
+      if (!headers) return { error: 'Your session has expired. Please sign in again.' };
+
       const res = await fetch(`/api/admin/tables/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...authHeader(session) },
+        headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify(updates),
       });
-      const json = await res.json();
-      if (json.success) {
-        setTables((prev) => prev.map((t) => (t.id === id ? json.table : t)));
-        showToast('Table updated successfully.', 'success');
-        return { success: true };
-      } else {
-        showToast(json.error || 'Update failed.', 'error');
-        return { error: json.error };
-      }
+      const json = await readApiResponse(res, 'Update failed.');
+      setTables((prev) => prev.map((t) => (t.id === id ? json.table : t)));
+      showToast('Table updated successfully.', 'success');
+      return { success: true };
     } catch (err) {
       showToast(err.message, 'error');
       return { error: err.message };
@@ -194,18 +230,17 @@ export default function TablesAdminPage() {
   const handleDelete = async () => {
     if (!deleteConfirmTable) return;
     try {
+      const headers = await getFreshAuthHeader();
+      if (!headers) return;
+
       const res = await fetch(`/api/admin/tables/${deleteConfirmTable.id}`, {
         method: 'DELETE',
-        headers: authHeader(session),
+        headers,
       });
-      const json = await res.json();
-      if (json.success) {
-        setTables((prev) => prev.filter((t) => t.id !== deleteConfirmTable.id));
-        showToast(`"${deleteConfirmTable.name}" deleted.`, 'success');
-        setDeleteConfirmTable(null);
-      } else {
-        showToast(json.error || 'Delete failed.', 'error');
-      }
+      await readApiResponse(res, 'Delete failed.');
+      setTables((prev) => prev.filter((t) => t.id !== deleteConfirmTable.id));
+      showToast(`"${deleteConfirmTable.name}" deleted.`, 'success');
+      setDeleteConfirmTable(null);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -216,19 +251,18 @@ export default function TablesAdminPage() {
    */
   const handleResetToken = async (id) => {
     try {
+      const headers = await getFreshAuthHeader();
+      if (!headers) return;
+
       const res = await fetch(`/api/admin/tables/${id}/reset-token`, {
         method: 'POST',
-        headers: authHeader(session),
+        headers,
       });
-      const json = await res.json();
-      if (json.success) {
-        setTables((prev) => prev.map((t) => (t.id === id ? json.table : t)));
-        showToast('Token reset. Old QR codes are now invalid — reprint new one.', 'success');
-        if (qrModalTable?.id === id) {
-          setQrModalTable(json.table);
-        }
-      } else {
-        showToast(json.error || 'Reset failed.', 'error');
+      const json = await readApiResponse(res, 'Token reset failed.');
+      setTables((prev) => prev.map((t) => (t.id === id ? json.table : t)));
+      showToast('Token reset. Old QR codes are now invalid — reprint new one.', 'success');
+      if (qrModalTable?.id === id) {
+        setQrModalTable(json.table);
       }
     } catch (err) {
       showToast(err.message, 'error');
