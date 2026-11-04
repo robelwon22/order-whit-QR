@@ -84,6 +84,7 @@ export default function TablesAdminPage() {
   const [testScanResults, setTestScanResults] = useState(null);
   const [testingScan, setTestingScan] = useState(false);
   const [deleteConfirmTable, setDeleteConfirmTable] = useState(null);
+  const [freeConfirmTable, setFreeConfirmTable] = useState(null);
 
   // Add tables form
   const [addCount, setAddCount] = useState(5);
@@ -243,6 +244,27 @@ export default function TablesAdminPage() {
       setDeleteConfirmTable(null);
     } catch (err) {
       showToast(err.message, 'error');
+    }
+  };
+
+  /**
+   * Frees the selected in-service table after staff confirms the override.
+   */
+  const handleFreeTable = async () => {
+    if (!freeConfirmTable) return;
+    try {
+      const headers = await getFreshAuthHeader();
+      if (!headers) return;
+      const response = await fetch(`/api/staff/tables/${freeConfirmTable.id}/free`, {
+        method: 'POST',
+        headers,
+      });
+      await readApiResponse(response, 'Could not free the table.');
+      showToast(`${freeConfirmTable.name} is now free.`, 'success');
+      setFreeConfirmTable(null);
+      await fetchTables();
+    } catch (error) {
+      showToast(error.message, 'error');
     }
   };
 
@@ -814,6 +836,7 @@ export default function TablesAdminPage() {
                           <Badge variant={tbl.active ? 'success' : 'neutral'} size="sm" dot>
                             {tbl.active ? 'Active' : 'Disabled'}
                           </Badge>
+                          {tbl.in_service && <Badge variant="warning" size="sm">In service</Badge>}
                         </div>
                         <div
                           style={{
@@ -834,6 +857,11 @@ export default function TablesAdminPage() {
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      {tbl.in_service && (
+                        <Button size="sm" variant="danger" onClick={() => setFreeConfirmTable(tbl)}>
+                          Free table
+                        </Button>
+                      )}
                       {/* Test Scan Diagnostics Button */}
                       <Button
                         size="sm"
@@ -1173,6 +1201,14 @@ export default function TablesAdminPage() {
         message="This table's QR code will permanently stop functioning and will be removed from your order stations."
         confirmText="Delete Table"
         danger
+      />
+      <ConfirmDialog
+        isOpen={!!freeConfirmTable}
+        onClose={() => setFreeConfirmTable(null)}
+        onConfirm={handleFreeTable}
+        title={`Free ${freeConfirmTable?.name || 'table'}?`}
+        message="This closes the current customer scan session and lets a new customer order at this table."
+        confirmText="Free Table"
       />
     </AppShell>
   );

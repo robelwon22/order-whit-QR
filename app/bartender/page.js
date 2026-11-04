@@ -237,6 +237,7 @@ function BartenderDashboardInner() {
   const [orders, setOrders] = useState([]);
   const [orderItemsMap, setOrderItemsMap] = useState({});
   const [updatingId, setUpdatingId] = useState(null);
+  const [freeingTableId, setFreeingTableId] = useState(null);
   const [filterTab, setFilterTab] = useState('active'); // 'active', 'served', 'all'
   const [earlierPanelOpen, setEarlierPanelOpen] = useState(false);
 
@@ -860,6 +861,38 @@ function BartenderDashboardInner() {
     }
   };
 
+  /**
+   * Frees an order's table through the staff-authorized server endpoint after confirmation.
+   */
+  const handleFreeTable = async (order) => {
+    if (!order?.table_id || freeingTableId) return;
+    const confirmed = window.confirm(isAmharic
+      ? `${order.table_name || 'ጠረጴዛ'}ን ነፃ ማድረግ? ይህ የደንበኛውን ክፍለ ጊዜ ይዘጋል።`
+      : `Free ${order.table_name || 'this table'}? This closes the customer's scan session.`);
+    if (!confirmed) return;
+
+    setFreeingTableId(order.table_id);
+    try {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      if (!session?.access_token) throw new Error('Your staff session has expired. Please sign in again.');
+      const response = await fetch(`/api/staff/tables/${order.table_id}/free`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || 'Could not free the table.');
+      }
+      showBartenderToast(`${result.table?.name || order.table_name} is now free.`);
+      await loadOrders();
+    } catch (error) {
+      alert(error.message || 'Could not free the table.');
+    } finally {
+      setFreeingTableId(null);
+    }
+  };
+
   const handleLogout = async () => {
     releaseWakeLock();
     try {
@@ -1375,6 +1408,8 @@ function BartenderDashboardInner() {
                       onOrderStatusTransition={handleOrderStatusTransition}
                       onEdit={handleOpenStaffEdit}
                       onCancel={handleOpenStaffCancel}
+                      onFreeTable={handleFreeTable}
+                      isFreeingTable={freeingTableId === order.table_id}
                     />
                   </OrderCardErrorBoundary>
                 ))}
@@ -1416,6 +1451,8 @@ function BartenderDashboardInner() {
                   onOrderStatusTransition={handleOrderStatusTransition}
                   onEdit={handleOpenStaffEdit}
                   onCancel={handleOpenStaffCancel}
+                  onFreeTable={handleFreeTable}
+                  isFreeingTable={freeingTableId === order.table_id}
                 />
               </OrderCardErrorBoundary>
             ))}
@@ -1785,6 +1822,8 @@ function OrderCard({
   onOrderStatusTransition,
   onEdit,
   onCancel,
+  onFreeTable,
+  isFreeingTable,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const stationRecord = Array.isArray(order?.order_stations) ? order.order_stations[0] : null;
@@ -1883,6 +1922,22 @@ function OrderCard({
                 }}
               >
                 EDITED ({order.edited_by === 'customer' ? 'by customer' : 'by staff'})
+              </span>
+            )}
+            {order.moved_from_table_name && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '3px 8px',
+                  borderRadius: 4,
+                  backgroundColor: 'rgba(107, 143, 113, 0.2)',
+                  color: '#A8D4AE',
+                  fontSize: 11,
+                  fontWeight: 800,
+                }}
+              >
+                Moved from {order.moved_from_table_name}
               </span>
             )}
           </div>
@@ -2199,6 +2254,17 @@ function OrderCard({
             icon={<DollarSign size={18} />}
           >
             Mark as Paid 💵
+          </Button>
+        )}
+        {['open', 'served'].includes(orderStatus) && (
+          <Button
+            fullWidth
+            size="sm"
+            variant="danger"
+            disabled={isFreeingTable}
+            onClick={() => onFreeTable(order)}
+          >
+            {isFreeingTable ? 'Freeing…' : 'Free table'}
           </Button>
         )}
       </div>

@@ -31,7 +31,47 @@ export async function GET(req) {
       return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true, tables: tables || [] });
+    const tableRows = tables || [];
+    let sessions = [];
+    if (tableRows.length) {
+      const { data: openSessions, error: sessionError } = await supabaseAdmin
+        .from('table_scan_sessions')
+        .select('id, table_id')
+        .in('table_id', tableRows.map((table) => table.id))
+        .is('closed_at', null);
+
+      if (sessionError) {
+        return NextResponse.json({ success: false, error: sessionError.message }, { status: 500 });
+      }
+      sessions = openSessions || [];
+    }
+    const sessionIds = sessions.map((scanSession) => scanSession.id);
+    let activeSessionIds = new Set();
+    if (sessionIds.length) {
+      const { data: activeOrders, error: activeOrderError } = await supabaseAdmin
+        .from('orders')
+        .select('scan_session_id')
+        .in('scan_session_id', sessionIds)
+        .in('status', ['open', 'served']);
+
+      if (activeOrderError) {
+        return NextResponse.json({ success: false, error: activeOrderError.message }, { status: 500 });
+      }
+      activeSessionIds = new Set((activeOrders || []).map((order) => order.scan_session_id));
+    }
+    const inServiceTableIds = new Set(
+      sessions
+        .filter((scanSession) => activeSessionIds.has(scanSession.id))
+        .map((scanSession) => scanSession.table_id),
+    );
+
+    return NextResponse.json({
+      success: true,
+      tables: tableRows.map((table) => ({
+        ...table,
+        in_service: inServiceTableIds.has(table.id),
+      })),
+    });
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message }, { status: err.status || 500 });
   }

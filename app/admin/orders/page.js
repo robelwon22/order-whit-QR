@@ -133,6 +133,7 @@ export default function AdminOrdersPage() {
   const [earlierOrdersError, setEarlierOrdersError] = useState(false);
   const [unclosedOpen, setUnclosedOpen] = useState(false);
   const [closingId, setClosingId] = useState(null);
+  const [freeingTableId, setFreeingTableId] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [diagnostics, setDiagnostics] = useState({});
   const [debugEnabled, setDebugEnabled] = useState(false);
@@ -208,7 +209,20 @@ export default function AdminOrdersPage() {
     recordDiagnostic('orders', "supabase.rpc('admin_orders_on', { p_cafe, p_day })", parameters, data, rpcError);
     if (rpcError) throw rpcError;
     try {
-      return orderResponse(data);
+      const result = orderResponse(data);
+      const orderIds = result.orders.map((order) => order.id).filter(Boolean);
+      if (!orderIds.length) return result;
+
+      const { data: moveMetadata, error: moveMetadataError } = await supabase
+        .from('orders')
+        .select('id, table_id, moved_from_table_name, moved_at')
+        .in('id', orderIds);
+      if (moveMetadataError) throw moveMetadataError;
+      const metadataById = new Map((moveMetadata || []).map((order) => [order.id, order]));
+      return {
+        ...result,
+        orders: result.orders.map((order) => ({ ...order, ...metadataById.get(order.id) })),
+      };
     } catch (responseError) {
       recordDiagnostic('orders', "supabase.rpc('admin_orders_on', { p_cafe, p_day })", parameters, data, responseError);
       throw responseError;
@@ -616,6 +630,34 @@ export default function AdminOrdersPage() {
     }
   };
 
+  /**
+   * Closes the selected table's active scan sessions after staff confirms the override.
+   */
+  const handleFreeTable = async (order) => {
+    if (!order?.table_id || freeingTableId) return;
+    if (!window.confirm(`Free ${order.table_name || 'this table'}? This closes the customer's scan session.`)) return;
+    setFreeingTableId(order.table_id);
+    try {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      if (!session?.access_token) throw new Error('Your staff session has expired. Please sign in again.');
+      const response = await fetch(`/api/staff/tables/${order.table_id}/free`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) throw new Error(result?.error || 'Could not free the table.');
+      showToast(`${result.table?.name || order.table_name} is now free.`, 'success');
+      setSelectedOrder(null);
+      await loadSelectedDay(selectedDayRef.current, true);
+    } catch (freeError) {
+      console.error('Failed to free table:', freeError);
+      showToast(freeError.message || 'Could not free the table.', 'error');
+    } finally {
+      setFreeingTableId(null);
+    }
+  };
+
   const exportCsv = () => {
     if (!dayData) return;
     const headers = [
@@ -928,6 +970,7 @@ export default function AdminOrdersPage() {
                         <span className="order-number">#{orderNumbers.get(order.id)}</span>
                         <span className="order-main">
                           <strong>{order.table_name || t('admin.ordersPage.table')}</strong>
+                          {order.moved_from_table_name && <small className="moved-from">Moved from {order.moved_from_table_name}</small>}
                           <small><Clock3 size={13} />{formatDateTime(order.created_at, timezone, lang)} · {order.item_count} {t('admin.ordersPage.items').toLocaleLowerCase()}</small>
                         </span>
                         <span className="order-accepted">{order.accepted_by_name || '—'}</span>
@@ -953,9 +996,21 @@ export default function AdminOrdersPage() {
                 <div>
                   <h2 id="order-detail-title">{selectedOrder.table_name || t('admin.ordersPage.table')} · #{orderNumbers.get(selectedOrder.id)}</h2>
                   <p><span className={`status-badge status-${selectedOrder.status}`}>{t(`admin.ordersPage.status.${selectedOrder.status}`)}</span> <strong>{formatMoney(selectedOrder.total, currency)}</strong></p>
+                  {selectedOrder.moved_from_table_name && <p className="moved-from">Moved from {selectedOrder.moved_from_table_name}</p>}
                 </div>
                 <button className="drawer-close" aria-label={t('common.close')} onClick={() => setSelectedOrder(null)}><X /></button>
               </div>
+              {['open', 'served'].includes(selectedOrder.status) && selectedOrder.table_id && (
+                <div className="drawer-actions">
+                  <Button
+                    variant="danger"
+                    disabled={freeingTableId === selectedOrder.table_id}
+                    onClick={() => handleFreeTable(selectedOrder)}
+                  >
+                    {freeingTableId === selectedOrder.table_id ? 'Freeing…' : 'Free table'}
+                  </Button>
+                </div>
+              )}
               <div className="drawer-content">
                 <section>
                   <h3>{t('admin.ordersPage.items')}</h3>
@@ -1061,6 +1116,8 @@ export default function AdminOrdersPage() {
         .edited-filter { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; white-space: nowrap; font-size: 13px; }
         .edited-filter input { width: 18px; min-height: 18px; accent-color: var(--color-roast); }
         .orders-list { display: flex; flex-direction: column; gap: 9px; }
+        .moved-from { color: var(--color-sage); font-weight: 700; }
+        .drawer-actions { padding: 0 18px 12px; }
         .order-row { width: 100%; min-height: 70px; text-align: left; display: grid; grid-template-columns: 48px minmax(130px,1fr) minmax(90px,auto) auto auto auto auto; align-items: center; gap: 12px; padding: 12px; cursor: pointer; }
         .order-row:hover { border-color: var(--color-caramel); }
         .order-number { color: var(--color-caramel); font-weight: 800; font-size: 16px; }

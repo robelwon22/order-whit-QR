@@ -132,10 +132,12 @@ export function getDeviceKey(cafeSlug) {
   try {
     let key = localStorage.getItem(keyName);
     if (!key) {
-      key =
-        typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : Math.random().toString(36).substring(2) + Date.now().toString(36);
+      key = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+          const random = Math.floor(Math.random() * 16);
+          return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+        });
       localStorage.setItem(keyName, key);
     }
 
@@ -388,6 +390,11 @@ export default function CustomerMenuPage() {
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [ordersError, setOrdersError] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
+  const [tableInService, setTableInService] = useState(false);
+  const [availableTables, setAvailableTables] = useState([]);
+  const [changeTableOpen, setChangeTableOpen] = useState(false);
+  const [selectedMoveTable, setSelectedMoveTable] = useState('');
+  const [changingTable, setChangingTable] = useState(false);
   const [scanModalOpen, setScanModalOpen] = useState(false);
   const [scannerMessage, setScannerMessage] = useState('');
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
@@ -702,7 +709,15 @@ export default function CustomerMenuPage() {
         try {
           const currentSession = JSON.parse(localStorage.getItem(getScanSessionKey(slug, token)) || 'null');
           const ownedOrderIds = Array.isArray(currentSession?.orderIds) ? currentSession.orderIds.map(String) : [];
-          sessionOrders = ordersData.filter((order) => ownedOrderIds.includes(String(order.id)));
+          sessionOrders = ordersData.filter((order) => (
+            ownedOrderIds.includes(String(order.id)) ||
+            String(order.scan_session_id || '') === String(currentSession?.databaseSessionId || '')
+          ));
+          if (sessionOrders.length === 0 && currentSession?.databaseSessionId && ownedOrderIds.length === 0) {
+            sessionOrders = ordersData.filter((order) => ['open', 'served'].includes(String(order.status || '').toLowerCase()));
+            currentSession.orderIds = sessionOrders.map((order) => String(order.id));
+            localStorage.setItem(getScanSessionKey(slug, token), JSON.stringify(currentSession));
+          }
         } catch (storageError) {
           console.warn('Could not match orders to this scan session:', storageError);
         }
@@ -814,6 +829,7 @@ export default function CustomerMenuPage() {
         }
 
         setLoading(true);
+        setTableInService(false);
         setLoadError('');
         setMissing(false);
         setCafeUnavailable(false);
@@ -867,6 +883,7 @@ export default function CustomerMenuPage() {
           setCats(catRes.data || []);
           setItems(itemRes.data || []);
         }
+        if (isMounted) setTableInService(false);
 
         // Resolve Table Token
         let activeToken = sessionEndedRef.current ? null : urlToken;
@@ -922,68 +939,76 @@ export default function CustomerMenuPage() {
               let storedSession = null;
               let storedCart = [];
               let previousOrder = null;
+              let nextSession = null;
+              let returnedOrders;
+              const deviceKey = getDeviceKey(slug);
+              if (!deviceKey) throw new Error('Device key could not be initialized.');
+              const { data: databaseSessionId, error: sessionError } = await withTimeout(
+                supabase.rpc('begin_table_scan_session', {
+                  p_token: activeToken,
+                  p_device_key: deviceKey,
+                }),
+                'Table scan session request',
+              );
+              if (sessionError) {
+                if (String(sessionError.message || '').toLowerCase().includes('table_in_service')) {
+                  if (isMounted) {
+                    setTableInService(true);
+                    setTable(null);
+                    sessionStorage.removeItem(`table_token_${slug}`);
+                    if (isFreshScan) router.replace(`/${slug}`, { scroll: false });
+                  }
+                  return;
+                }
+                throw sessionError;
+              }
+              const activeDatabaseSessionId = typeof databaseSessionId === 'string'
+                ? databaseSessionId
+                : databaseSessionId?.session_id;
+              if (!activeDatabaseSessionId) {
+                throw new Error('The table scan session could not be created.');
+              }
               try {
                 storedSession = JSON.parse(localStorage.getItem(sessionKey) || 'null');
-                if (!isFreshScan && storedSession?.id) {
+                if (storedSession?.databaseSessionId === activeDatabaseSessionId && storedSession?.id) {
                   storedCart = JSON.parse(localStorage.getItem(getSessionCartKey(storedSession.id)) || '[]');
                   if (!Array.isArray(storedCart)) storedCart = [];
                 }
-                if (!isFreshScan) {
+                if (storedSession?.databaseSessionId === activeDatabaseSessionId) {
                   previousOrder = JSON.parse(localStorage.getItem(`last-order:${slug}:${activeToken}`) || 'null');
                 }
               } catch (storageError) {
                 console.warn('Could not restore table session from this device:', storageError);
               }
-              const hours = Math.max(1, Number(c.settings?.session_hours) || 3);
-              const expired = isFreshScan || !storedSession || !Number.isFinite(Date.parse(storedSession.lastActiveAt))
-                || Date.now() - Date.parse(storedSession.lastActiveAt) > hours * 60 * 60 * 1000;
-              let returnedOrders;
-              if (!expired) {
-                try {
-                  returnedOrders = await withTimeout(
-                    fetchTableOrdersRef.current(activeToken),
-                    'Table orders request',
-                  );
-                } catch (ordersRequestError) {
-                  console.error('Could not load table orders:', ordersRequestError);
-                  returnedOrders = null;
-                }
-                if (sessionEndedRef.current) return;
-              } else {
-                returnedOrders = [];
+              const startNewSession = storedSession?.databaseSessionId !== activeDatabaseSessionId || !storedSession?.id;
+              nextSession = startNewSession ? {
+                id: createSessionId(),
+                databaseSessionId: activeDatabaseSessionId,
+                startedAt: new Date().toISOString(),
+                lastActiveAt: new Date().toISOString(),
+                orderIds: [],
+              } : storedSession;
+              if (startNewSession && storedSession?.id) {
+                localStorage.removeItem(getSessionCartKey(storedSession.id));
               }
+              localStorage.setItem(sessionKey, JSON.stringify(nextSession));
+              sessionIdRef.current = nextSession.id;
+              setSessionId(nextSession.id);
+              try {
+                returnedOrders = await withTimeout(
+                  fetchTableOrdersRef.current(activeToken),
+                  'Table orders request',
+                );
+              } catch (ordersRequestError) {
+                console.error('Could not load table orders:', ordersRequestError);
+                returnedOrders = null;
+              }
+              if (sessionEndedRef.current) return;
               const activeOrders = Array.isArray(returnedOrders)
                 ? returnedOrders.filter((order) => !['paid', 'cancelled'].includes(String(order.status).toLowerCase()))
                 : [];
-              const retainedFinishedIds = !expired && Array.isArray(returnedOrders)
-                ? returnedOrders
-                    .filter((order) => ['paid', 'cancelled'].includes(String(order.status).toLowerCase()))
-                    .map((order) => String(order.id))
-                : [];
-              const startNewSession = expired;
-              const nextSession = !startNewSession && storedSession ? storedSession : {
-                id: createSessionId(),
-                startedAt: new Date().toISOString(),
-                lastActiveAt: new Date().toISOString(),
-                orderIds: retainedFinishedIds,
-              };
-
-              if (startNewSession && storedSession?.id) {
-                localStorage.removeItem(getSessionCartKey(storedSession.id));
-                localStorage.removeItem(sessionKey);
-              }
-              if (startNewSession || !nextSession.databaseSessionId) {
-                const { data: databaseSessionId, error: sessionError } = await withTimeout(
-                  supabase.rpc('begin_table_scan_session', { p_token: activeToken }),
-                  'Table scan session request',
-                );
-                if (sessionError) throw sessionError;
-                nextSession.databaseSessionId = typeof databaseSessionId === 'string'
-                  ? databaseSessionId
-                  : databaseSessionId?.session_id;
-                if (!nextSession.databaseSessionId) {
-                  throw new Error('The table scan session could not be created.');
-                }
+              if (startNewSession) {
+                nextSession.orderIds = activeOrders.map((order) => String(order.id));
               }
               if (isMounted) {
                 sessionIdRef.current = nextSession.id;
@@ -1022,7 +1047,12 @@ export default function CustomerMenuPage() {
       } catch (err) {
         console.error('Error loading menu:', err);
         if (isMounted) {
-          setLoadError(err.message || 'The menu could not be loaded. Please try again.');
+          if (String(err.message || '').toLowerCase().includes('table_in_service')) {
+            setTableInService(true);
+            setTable(null);
+          } else {
+            setLoadError(err.message || 'The menu could not be loaded. Please try again.');
+          }
         }
       } finally {
         if (isMounted) setLoading(false);
@@ -1108,6 +1138,87 @@ export default function CustomerMenuPage() {
       }) || (activeOrder?.id ? tableOrders.find((o) => o.id === activeOrder.id) : null)
     );
   }, [tableOrders, activeOrder]);
+
+  /**
+   * Loads the free tables in this customer's cafe before opening the table-change dialog.
+   */
+  const openChangeTable = async () => {
+    if (!activeTableOrder) return;
+    const storedSession = JSON.parse(
+      localStorage.getItem(getScanSessionKey(slug, table?.token)) || 'null',
+    );
+    if (!storedSession?.databaseSessionId) {
+      showToast(isAmharic ? 'የጠረጴዛ ክፍለ ጊዜው አልተገኘም።' : 'The table session could not be found.');
+      return;
+    }
+
+    const { data, error } = await supabase.rpc('get_free_tables_for_scan_session', {
+      p_scan_session_id: storedSession.databaseSessionId,
+      p_device_key: getDeviceKey(slug),
+    });
+    if (error) {
+      showToast(error.message || (isAmharic ? 'ነፃ ጠረጴዛዎችን መጫን አልተቻለም።' : 'Could not load free tables.'));
+      return;
+    }
+
+    const rows = Array.isArray(data) ? data : [];
+    setAvailableTables(rows.filter((row) => row.table_id !== table?.id));
+    setSelectedMoveTable('');
+    setChangeTableOpen(true);
+  };
+
+  /**
+   * Confirms and performs the server-validated move to the selected free table.
+   */
+  const confirmChangeTable = async () => {
+    if (!selectedMoveTable || !table?.token || changingTable) return;
+    const storedSession = JSON.parse(
+      localStorage.getItem(getScanSessionKey(slug, table.token)) || 'null',
+    );
+    if (!storedSession?.databaseSessionId) return;
+
+    setChangingTable(true);
+    try {
+      const { data, error } = await supabase.rpc('move_scan_session_to_table', {
+        p_scan_session_id: storedSession.databaseSessionId,
+        p_device_key: getDeviceKey(slug),
+        p_new_table_id: selectedMoveTable,
+      });
+      if (error) {
+        showToast(error.message || (isAmharic ? 'ጠረጴዛውን መቀየር አልተቻለም።' : 'Could not change tables.'));
+        return;
+      }
+
+      const movedTable = Array.isArray(data) ? data[0] : data;
+      if (!movedTable?.token || !movedTable?.table_name) {
+        throw new Error('The table move response did not include the new table details.');
+      }
+      const oldToken = table.token;
+      localStorage.removeItem(getScanSessionKey(slug, oldToken));
+      localStorage.removeItem(`last-order:${slug}:${oldToken}`);
+      const nextSession = { ...storedSession, lastActiveAt: new Date().toISOString() };
+      localStorage.setItem(getScanSessionKey(slug, movedTable.token), JSON.stringify(nextSession));
+      sessionStorage.setItem(`table_token_${slug}`, movedTable.token);
+      const nextTable = { ...table, id: movedTable.table_id, token: movedTable.token, name: movedTable.table_name };
+      tableRef.current = nextTable;
+      setTable(nextTable);
+      setTableOrders((current) => current.map((order) => ({
+        ...order,
+        table_id: movedTable.table_id,
+        table_name: movedTable.table_name,
+        moved_from_table_name: table.name,
+      })));
+      setChangeTableOpen(false);
+      setMyOrdersOpen(false);
+      showToast(isAmharic
+        ? `ትዕዛዝዎ ወደ ${movedTable.table_name} ተዛውሯል።`
+        : `Your order was moved to ${movedTable.table_name}.`);
+    } catch (moveError) {
+      showToast(moveError.message || (isAmharic ? 'ጠረጴዛውን መቀየር አልተቻለም።' : 'Could not change tables.'));
+    } finally {
+      setChangingTable(false);
+    }
+  };
 
   // Polling: every 4s if an order is open, every 15s otherwise. Pauses when hidden.
   useEffect(() => {
@@ -1705,7 +1816,16 @@ export default function CustomerMenuPage() {
               <p style={{ margin: '12px 0 0', fontWeight: 700 }}>{cafe.name}</p>
             </div>
           )}
-          {sessionEnded ? (
+          {tableInService ? (
+            <>
+              <h1 style={{ fontSize: 24, lineHeight: 1.4, margin: '0 0 12px' }}>
+                This table is already being served. If this is your table, continue on the phone you ordered with. Otherwise please ask the staff for help.
+              </h1>
+              <p lang="am" style={{ fontSize: 20, lineHeight: 1.6, margin: 0 }}>
+                ይህ ጠረጴዛ አስቀድሞ በአገልግሎት ላይ ነው። ይህ የእርስዎ ጠረጴዛ ከሆነ፣ ትዕዛዝ ባዘዙበት ስልክ ይቀጥሉ። ካልሆነ እባክዎ ሰራተኞችን ያነጋግሩ።
+              </p>
+            </>
+          ) : sessionEnded ? (
             <>
               <h1 style={{ fontSize: 24, lineHeight: 1.4, margin: '0 0 12px' }}>
                 Thank you! Your order is paid. To order again, please scan the QR code on your table.
@@ -1724,29 +1844,31 @@ export default function CustomerMenuPage() {
               </p>
             </>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              setScannerMessage('');
-              setScanModalOpen(true);
-            }}
-            style={{
-              minHeight: 58,
-              width: '100%',
-              maxWidth: 340,
-              border: 0,
-              borderRadius: 16,
-              background: buttonColor,
-              color: btnTextColor,
-              fontSize: 19,
-              fontWeight: 800,
-              cursor: 'pointer',
-              boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-            }}
-          >
-            <span style={{ display: 'block' }}>Scan QR Code</span>
-            <span lang="am" style={{ display: 'block', fontSize: 14, marginTop: 2 }}>QR ኮድ ይቃኙ</span>
-          </button>
+          {!tableInService && (
+            <button
+              type="button"
+              onClick={() => {
+                setScannerMessage('');
+                setScanModalOpen(true);
+              }}
+              style={{
+                minHeight: 58,
+                width: '100%',
+                maxWidth: 340,
+                border: 0,
+                borderRadius: 16,
+                background: buttonColor,
+                color: btnTextColor,
+                fontSize: 19,
+                fontWeight: 800,
+                cursor: 'pointer',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+              }}
+            >
+              <span style={{ display: 'block' }}>Scan QR Code</span>
+              <span lang="am" style={{ display: 'block', fontSize: 14, marginTop: 2 }}>QR ኮድ ይቃኙ</span>
+            </button>
+          )}
         </main>
         {scanModalOpen && (
           <div
@@ -2797,6 +2919,98 @@ export default function CustomerMenuPage() {
         ) : null}
       </BottomSheet>
 
+      {changeTableOpen && (
+        <div
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !changingTable) setChangeTableOpen(false);
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100001,
+            background: 'rgba(0,0,0,0.65)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: 20,
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="change-table-title"
+            style={{
+              width: '100%',
+              maxWidth: 440,
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              background: surfaceColor,
+              color: textColor,
+              border: `1px solid ${borderColor}`,
+              borderRadius: 18,
+              padding: 20,
+            }}
+          >
+            <h2 id="change-table-title" style={{ margin: '0 0 12px', fontSize: 21 }}>
+              {isAmharic ? 'ጠረጴዛ ቀይር' : 'Change table'}
+            </h2>
+            {selectedMoveTable ? (
+              <>
+                <p style={{ lineHeight: 1.55, marginBottom: 20 }}>
+                  {isAmharic
+                    ? `ትዕዛዜን ከ${table?.name} ወደ ${availableTables.find((row) => row.table_id === selectedMoveTable)?.table_name} ላዛውር?`
+                    : `Move my order from ${table?.name} to ${availableTables.find((row) => row.table_id === selectedMoveTable)?.table_name}?`}
+                </p>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <Button fullWidth variant="secondary" disabled={changingTable} onClick={() => setSelectedMoveTable('')}>
+                    {isAmharic ? 'ተመለስ' : 'Back'}
+                  </Button>
+                  <Button fullWidth variant="primary" loading={changingTable} disabled={changingTable} onClick={confirmChangeTable}>
+                    {isAmharic ? 'አዎ፣ አዛውር' : 'Confirm move'}
+                  </Button>
+                </div>
+              </>
+            ) : availableTables.length === 0 ? (
+              <>
+                <p style={{ lineHeight: 1.55 }}>
+                  {isAmharic ? 'በአሁኑ ጊዜ ነፃ ጠረጴዛ የለም።' : 'There are no free tables right now.'}
+                </p>
+                <Button fullWidth variant="secondary" onClick={() => setChangeTableOpen(false)}>
+                  {isAmharic ? 'ዝጋ' : 'Close'}
+                </Button>
+              </>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {availableTables.map((row) => (
+                  <button
+                    key={row.table_id}
+                    type="button"
+                    onClick={() => setSelectedMoveTable(row.table_id)}
+                    style={{
+                      minHeight: 48,
+                      padding: '10px 14px',
+                      borderRadius: 10,
+                      border: `1px solid ${borderColor}`,
+                      background: surface2Color,
+                      color: textColor,
+                      textAlign: 'left',
+                      fontSize: 15,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {row.table_name}
+                  </button>
+                ))}
+                <Button fullWidth variant="ghost" onClick={() => setChangeTableOpen(false)}>
+                  {isAmharic ? 'ተወው' : 'Cancel'}
+                </Button>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
       {/* ─── CART BOTTOM SHEET ──────────────────────────────────────────────── */}
       <BottomSheet
         isOpen={cartOpen}
@@ -2897,6 +3111,17 @@ export default function CustomerMenuPage() {
         title={t('menu.my_orders') || (isAmharic ? 'የጠረጴዛ ትዕዛዞቼ' : 'My Orders')}
         subtitle={table ? `${table.name} · ${isAmharic ? 'ከ6 ሰዓት ወዲህ' : 'Last 6 hours'}` : ''}
       >
+        {tableOrders.some((order) => ['open', 'served'].includes(String(order.status || '').toLowerCase())) && (
+          <Button
+            fullWidth
+            size="md"
+            variant="secondary"
+            style={{ minHeight: 46, marginBottom: 16 }}
+            onClick={openChangeTable}
+          >
+            {isAmharic ? 'ጠረጴዛ ቀይር' : 'Change table'}
+          </Button>
+        )}
         {loadingOrders && tableOrders.length === 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '12px 0' }}>
             <Skeleton height={110} borderRadius={16} />
