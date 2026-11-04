@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { supabase, pick } from '../../lib/supabase';
+import jsQR from 'jsqr';
 import { useI18n } from '../../lib/i18n';
 import { Logo, CoffeeIllustration } from '../../components/ui/Logo';
 import { CafeLogo } from '../../components/ui/CafeLogo';
@@ -12,7 +13,6 @@ import { BottomSheet } from '../../components/ui/BottomSheet';
 import { QtyStepper, Badge, EmptyState, Skeleton } from '../../components/ui/Badge';
 import { LanguageSwitcher } from '../../components/ui/LanguageSwitcher';
 import { ThemeToggle, useTheme } from '../../components/ui/ThemeToggle';
-import { Modal } from '../../components/ui/Modal';
 import {
   Search,
   ShoppingBag,
@@ -325,6 +325,7 @@ function OrderStepper({ step, isAmharic, t }) {
  */
 export default function CustomerMenuPage() {
   const { slug } = useParams();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { lang, setLang, t, isAmharic } = useI18n();
   const { choice: themeChoice, systemDark } = useTheme();
@@ -387,7 +388,8 @@ export default function CustomerMenuPage() {
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [ordersError, setOrdersError] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
-  const [sessionEndNoticeOpen, setSessionEndNoticeOpen] = useState(false);
+  const [scanModalOpen, setScanModalOpen] = useState(false);
+  const [scannerMessage, setScannerMessage] = useState('');
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [toastMessage, setToastMessage] = useState(null);
 
@@ -410,14 +412,16 @@ export default function CustomerMenuPage() {
   sessionIdRef.current = sessionId;
   const tableOrdersRef = useRef(tableOrders);
   tableOrdersRef.current = tableOrders;
+  const scannerVideoRef = useRef(null);
+  const scannerStreamRef = useRef(null);
 
   /**
    * Ends this device's table-ordering session and removes its persisted credentials and cart.
    */
-  const endCustomerSession = useCallback(() => {
+  const endCustomerSession = useCallback((sessionToken = null) => {
     if (sessionEndedRef.current) return;
     sessionEndedRef.current = true;
-    const token = tableRef.current?.token;
+    const token = sessionToken || tableRef.current?.token;
     const currentSessionId = sessionIdRef.current;
     try {
       localStorage.setItem(`session_ended_${slug}`, 'true');
@@ -431,6 +435,11 @@ export default function CustomerMenuPage() {
     }
     if (token) {
       try {
+        const key = getScanSessionKey(slug, token);
+        const storedSession = JSON.parse(localStorage.getItem(key) || 'null');
+        if (storedSession?.id) {
+          localStorage.removeItem(getSessionCartKey(storedSession.id));
+        }
         localStorage.removeItem(getScanSessionKey(slug, token));
         localStorage.removeItem(`last-order:${slug}:${token}`);
       } catch (storageError) {
@@ -458,7 +467,6 @@ export default function CustomerMenuPage() {
     setCartOpen(false);
     setMyOrdersOpen(false);
     setSessionEnded(true);
-    setSessionEndNoticeOpen(true);
   }, [slug]);
 
   /**
@@ -480,8 +488,150 @@ export default function CustomerMenuPage() {
   const isAmharicRef = useRef(isAmharic);
   isAmharicRef.current = isAmharic;
 
+  /**
+   * Starts the in-page QR camera and navigates only to a valid table URL for this cafe.
+   */
+  useEffect(() => {
+    if (!scanModalOpen) return undefined;
+    let active = true;
+    let scanTimer = null;
+    let stream = null;
+    let videoElement = null;
+
+    /**
+     * Shows the phone-camera fallback when the in-page scanner cannot be used.
+     */
+    const showCameraFallback = (message) => {
+      if (active) {
+        setScannerMessage(message);
+      }
+    };
+
+    /**
+     * Validates a decoded QR value against the configured site origin and current cafe slug.
+     */
+    const acceptQrValue = (value) => {
+      try {
+        const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL || '';
+        if (!configuredSiteUrl) throw new Error('The scan destination is not configured.');
+        const site = new URL(configuredSiteUrl);
+        const scannedUrl = new URL(value);
+        const token = scannedUrl.searchParams.get('t');
+        if (
+          scannedUrl.origin !== site.origin ||
+          scannedUrl.pathname.replace(/\/+$/, '') !== `/${slug}` ||
+          !token
+        ) {
+          showCameraFallback('That QR code is not for this cafe table. Please scan the QR code on your table.');
+          return false;
+        }
+
+        setScanModalOpen(false);
+        router.push(`${scannedUrl.pathname}${scannedUrl.search}`);
+        return true;
+      } catch {
+        showCameraFallback('That QR code is not a valid table link. Please scan the QR code on your table.');
+        return false;
+      }
+    };
+
+    /**
+     * Repeatedly checks camera frames for QR codes while the scanner modal is open.
+     */
+    const scanFrames = async (detector, video, canvas, context) => {
+      if (!active) return;
+      try {
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          let currentDetector = detector;
+          let scannedValue = '';
+          if (currentDetector) {
+            try {
+              const codes = await currentDetector.detect(video);
+              scannedValue = codes[0]?.rawValue || '';
+            } catch {
+              currentDetector = null;
+            }
+          }
+          if (!currentDetector) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const image = context.getImageData(0, 0, canvas.width, canvas.height);
+            scannedValue = jsQR(image.data, image.width, image.height)?.data || '';
+          }
+          if (scannedValue && acceptQrValue(scannedValue)) return;
+        }
+      } catch {
+        showCameraFallback('Could not read the QR code. Please hold it steady or scan it with your phone camera app.');
+      }
+      if (active) {
+        scanTimer = setTimeout(() => scanFrames(detector, video, canvas, context), 300);
+      }
+    };
+
+    /**
+     * Requests camera access and prepares the browser QR detector.
+     */
+    const startCamera = async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        showCameraFallback('Camera access is not supported here. Please scan the QR code on your table with your phone camera app.');
+        return;
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: 'environment' } },
+        });
+        if (!active) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        scannerStreamRef.current = stream;
+        videoElement = scannerVideoRef.current;
+        if (!videoElement) {
+          showCameraFallback('Could not open the camera preview. Please scan the QR code with your phone camera app.');
+          return;
+        }
+        videoElement.srcObject = stream;
+        await videoElement.play();
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        if (!context) {
+          showCameraFallback('QR scanning is not supported here. Please scan the QR code on your table with your phone camera app.');
+          return;
+        }
+        let detector = null;
+        if (typeof window.BarcodeDetector === 'function') {
+          try {
+            detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+          } catch {
+            detector = null;
+          }
+        }
+        scanFrames(detector, videoElement, canvas, context);
+      } catch (cameraError) {
+        showCameraFallback(cameraError?.name === 'NotAllowedError'
+          ? 'Camera access was blocked. Please scan the QR code on your table with your phone camera app.'
+          : 'The camera could not be started. Please scan the QR code on your table with your phone camera app.');
+      }
+    };
+
+    setScannerMessage('');
+    startCamera();
+    return () => {
+      active = false;
+      if (scanTimer) clearTimeout(scanTimer);
+      if (stream) stream.getTracks().forEach((track) => track.stop());
+      if (scannerStreamRef.current) {
+        scannerStreamRef.current.getTracks().forEach((track) => track.stop());
+        scannerStreamRef.current = null;
+      }
+      if (videoElement) videoElement.srcObject = null;
+    };
+  }, [scanModalOpen, router, slug]);
+
   // Read URL table token
-  const urlToken = searchParams.get('t') || searchParams.get('table');
+  const urlToken = searchParams.get('t');
 
   /**
    * Refreshes the activity timestamp for the current browser table session.
@@ -518,7 +668,7 @@ export default function CustomerMenuPage() {
     if (sessionEndedRef.current) return [];
     const token =
       explicitToken ||
-      table?.token ||
+      tableRef.current?.token ||
       (typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null);
 
     if (!token) return [];
@@ -556,6 +706,10 @@ export default function CustomerMenuPage() {
         } catch (storageError) {
           console.warn('Could not match orders to this scan session:', storageError);
         }
+        if (sessionOrders.some((order) => String(order.status || '').toLowerCase() === 'paid')) {
+          endCustomerSession(token);
+          return [];
+        }
         // Check for transition to ready
         sessionOrders.forEach((order) => {
           const currentStep = getOrderStep(order);
@@ -580,7 +734,7 @@ export default function CustomerMenuPage() {
       setOrdersError(true);
       return null;
     }
-  }, [table?.token, slug]);
+  }, [slug, endCustomerSession]);
 
   const fetchTableOrdersRef = useRef(fetchTableOrders);
   fetchTableOrdersRef.current = fetchTableOrders;
@@ -637,8 +791,7 @@ export default function CustomerMenuPage() {
      */
     async function init(isRetry = false) {
       try {
-        const navigationType = performance.getEntriesByType('navigation')[0]?.type;
-        const isFreshScan = navigationType === 'navigate' && Boolean(urlToken);
+        const isFreshScan = Boolean(urlToken);
         const endedFlagKey = `session_ended_${slug}`;
         let persistedSessionEnded = false;
         try {
@@ -652,7 +805,6 @@ export default function CustomerMenuPage() {
         }
         sessionEndedRef.current = persistedSessionEnded;
         setSessionEnded(persistedSessionEnded);
-        setSessionEndNoticeOpen(persistedSessionEnded);
         if (persistedSessionEnded) {
           try {
             sessionStorage.removeItem(`table_token_${slug}`);
@@ -766,37 +918,39 @@ export default function CustomerMenuPage() {
                 localStorage.removeItem(`table_order_ids_${slug}_${activeToken}`);
               } catch {}
 
-              const isNewScan = isFreshScan;
               const sessionKey = getScanSessionKey(slug, activeToken);
               let storedSession = null;
               let storedCart = [];
               let previousOrder = null;
               try {
                 storedSession = JSON.parse(localStorage.getItem(sessionKey) || 'null');
-                if (storedSession?.id) {
+                if (!isFreshScan && storedSession?.id) {
                   storedCart = JSON.parse(localStorage.getItem(getSessionCartKey(storedSession.id)) || '[]');
                   if (!Array.isArray(storedCart)) storedCart = [];
                 }
-                previousOrder = JSON.parse(localStorage.getItem(`last-order:${slug}:${activeToken}`) || 'null');
+                if (!isFreshScan) {
+                  previousOrder = JSON.parse(localStorage.getItem(`last-order:${slug}:${activeToken}`) || 'null');
+                }
               } catch (storageError) {
                 console.warn('Could not restore table session from this device:', storageError);
               }
               const hours = Math.max(1, Number(c.settings?.session_hours) || 3);
-              const expired = !storedSession || !Number.isFinite(Date.parse(storedSession.lastActiveAt))
+              const expired = isFreshScan || !storedSession || !Number.isFinite(Date.parse(storedSession.lastActiveAt))
                 || Date.now() - Date.parse(storedSession.lastActiveAt) > hours * 60 * 60 * 1000;
               let returnedOrders;
-              try {
-                returnedOrders = await withTimeout(
-                  fetchTableOrdersRef.current(activeToken),
-                  'Table orders request',
-                );
-              } catch (ordersRequestError) {
-                console.error('Could not load table orders:', ordersRequestError);
-                returnedOrders = null;
-              }
-              if (expired) {
+              if (!expired) {
+                try {
+                  returnedOrders = await withTimeout(
+                    fetchTableOrdersRef.current(activeToken),
+                    'Table orders request',
+                  );
+                } catch (ordersRequestError) {
+                  console.error('Could not load table orders:', ordersRequestError);
+                  returnedOrders = null;
+                }
+                if (sessionEndedRef.current) return;
+              } else {
                 returnedOrders = [];
-                setTableOrders([]);
               }
               const activeOrders = Array.isArray(returnedOrders)
                 ? returnedOrders.filter((order) => !['paid', 'cancelled'].includes(String(order.status).toLowerCase()))
@@ -806,7 +960,7 @@ export default function CustomerMenuPage() {
                     .filter((order) => ['paid', 'cancelled'].includes(String(order.status).toLowerCase()))
                     .map((order) => String(order.id))
                 : [];
-              const startNewSession = expired || (isNewScan && !activeOrders.length && storedCart.length === 0);
+              const startNewSession = expired;
               const nextSession = !startNewSession && storedSession ? storedSession : {
                 id: createSessionId(),
                 startedAt: new Date().toISOString(),
@@ -818,24 +972,31 @@ export default function CustomerMenuPage() {
                 localStorage.removeItem(getSessionCartKey(storedSession.id));
                 localStorage.removeItem(sessionKey);
               }
+              if (startNewSession || !nextSession.databaseSessionId) {
+                const { data: databaseSessionId, error: sessionError } = await withTimeout(
+                  supabase.rpc('begin_table_scan_session', { p_token: activeToken }),
+                  'Table scan session request',
+                );
+                if (sessionError) throw sessionError;
+                nextSession.databaseSessionId = typeof databaseSessionId === 'string'
+                  ? databaseSessionId
+                  : databaseSessionId?.session_id;
+                if (!nextSession.databaseSessionId) {
+                  throw new Error('The table scan session could not be created.');
+                }
+              }
               if (isMounted) {
+                sessionIdRef.current = nextSession.id;
                 setSessionId(nextSession.id);
                 localStorage.setItem(sessionKey, JSON.stringify(nextSession));
-                if (!isNewScan) {
-                  setCart(expired ? [] : storedCart);
-                } else if (startNewSession) {
-                  if (storedSession?.id) localStorage.removeItem(getSessionCartKey(storedSession.id));
+                if (startNewSession) {
                   setCart([]);
                   setWelcomeBack(null);
-                  setShowWelcome(true);
+                  setShowWelcome(isFreshScan);
                 } else {
                   setCart(storedCart);
                   setShowWelcome(false);
-                  if (activeOrders.length) {
-                    setWelcomeBack({ type: 'orders', order: activeOrders[0], count: activeOrders.length });
-                  } else {
-                    setWelcomeBack({ type: 'cart', count: storedCart.reduce((sum, item) => sum + Number(item.qty || 0), 0) });
-                  }
+                  setWelcomeBack(null);
                 }
                 if (previousOrder && Array.isArray(previousOrder.items)
                   && Date.now() - Number(previousOrder.at || 0) <= 24 * 60 * 60 * 1000) {
@@ -850,7 +1011,9 @@ export default function CustomerMenuPage() {
                   setScanNotice(isAmharicRef.current
                     ? 'ትዕዛዞችዎን ማረጋገጥ አልተቻለም። አዲስ ትዕዛዝ በደህና ይጀምሩ።'
                     : 'We could not check for earlier orders. You can safely start a fresh order.');
-                  if (isNewScan) setShowWelcome(true);
+                }
+                if (isFreshScan) {
+                  router.replace(`/${slug}`, { scroll: false });
                 }
               }
             }
@@ -872,7 +1035,7 @@ export default function CustomerMenuPage() {
     return () => {
       isMounted = false;
     };
-  }, [slug, urlToken]);
+  }, [slug, urlToken, router]);
 
   // Subscribe to realtime item, category, cafe, and order changes once per cafe slug.
   useEffect(() => {
@@ -888,9 +1051,26 @@ export default function CustomerMenuPage() {
           setCafe(payload.new);
         }
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
         const token = typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null;
-        if (token) fetchTableOrdersRef.current(token);
+        if (!token) return;
+        if (String(payload.new?.status || '').toLowerCase() === 'paid') {
+          try {
+            const storedSession = JSON.parse(
+              localStorage.getItem(getScanSessionKey(slug, token)) || 'null',
+            );
+            const orderIds = Array.isArray(storedSession?.orderIds)
+              ? storedSession.orderIds.map(String)
+              : [];
+            if (orderIds.includes(String(payload.new.id))) {
+              endCustomerSession(token);
+              return;
+            }
+          } catch (storageError) {
+            console.warn('Could not verify the paid order session:', storageError);
+          }
+        }
+        fetchTableOrdersRef.current(token);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_stations' }, () => {
         const token = typeof window !== 'undefined' ? sessionStorage.getItem(`table_token_${slug}`) : null;
@@ -901,7 +1081,7 @@ export default function CustomerMenuPage() {
     return () => {
       supabase.removeChannel(ch);
     };
-  }, [slug]);
+  }, [slug, endCustomerSession]);
 
   // Determine if there is any active open order
   const hasOpenOrder = useMemo(() => {
@@ -1008,45 +1188,6 @@ export default function CustomerMenuPage() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [table?.token, slug, hasOpenOrder, fetchTableOrders, loadMenuData]);
-
-  // Part B: Orders countdown ticker (paid and cancelled orders countdown and auto-fade out)
-  const hasExpiringOrder = tableOrders.some(
-      (o) => (o.status === 'paid' || o.status === 'cancelled') && typeof o.seconds_left === 'number'
-    );
-  useEffect(() => {
-    if (!hasExpiringOrder || sessionEnded) return;
-
-    const timer = setInterval(() => {
-      let expired = false;
-      const updated = [];
-      for (const order of tableOrdersRef.current) {
-        const status = String(order.status || '').toLowerCase();
-        if ((status === 'paid' || status === 'cancelled') && typeof order.seconds_left === 'number') {
-          const nextSeconds = order.seconds_left - 1;
-          if (nextSeconds <= 0) {
-            expired = true;
-            continue;
-          }
-          updated.push({ ...order, seconds_left: nextSeconds });
-        } else {
-          updated.push(order);
-        }
-      }
-
-      tableOrdersRef.current = updated;
-      const hasOtherActiveOrders = updated.some((order) => {
-        const step = getOrderStep(order);
-        return step > 0 && step < 4;
-      });
-      if (expired && !hasOtherActiveOrders) {
-        endCustomerSession();
-        return;
-      }
-      setTableOrders(updated);
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [hasExpiringOrder, sessionEnded, endCustomerSession]);
 
   // Part C: Open Edit Order BottomSheet
   /**
@@ -1300,14 +1441,28 @@ export default function CustomerMenuPage() {
         note: i.note || '',
       }));
 
+      const currentSession = JSON.parse(
+        localStorage.getItem(getScanSessionKey(slug, table.token)) || 'null',
+      );
+      if (!currentSession?.databaseSessionId) {
+        endCustomerSession(table.token);
+        return;
+      }
+
       const { data, error } = await supabase.rpc('place_order_v2', {
         p_token: table.token,
         p_items: pItems,
         p_note: orderNote.trim(),
         p_device_key: deviceKey,
+        p_scan_session_id: currentSession.databaseSessionId,
       });
 
       if (error) {
+        const errorCode = String(error.message || error.details || '').toLowerCase();
+        if (errorCode.includes('table_session_closed') || errorCode.includes('table_session_missing')) {
+          endCustomerSession(table.token);
+          return;
+        }
         alert(mapOrderError(error, isAmharic));
         return;
       }
@@ -1519,6 +1674,147 @@ export default function CustomerMenuPage() {
   const accentColor = brandColor;
   const customerLogoUrl = customerIsDark ? (darkTheme.logo_url || cafe.logo_url) : cafe.logo_url;
   const needsLogoChip = customerIsDark && !darkTheme.logo_url && Boolean(cafe.logo_url);
+
+  if (sessionEnded || !table?.token || !sessionId) {
+    const messageColor = customerIsDark ? (darkTheme.text || '#F3EADF') : textColor;
+    return (
+      <div
+        className="customer-menu"
+        data-theme={customerIsDark ? 'dark' : 'light'}
+        style={{
+          minHeight: '100vh',
+          background: bgColor,
+          color: messageColor,
+          display: 'grid',
+          placeItems: 'center',
+          padding: 24,
+          textAlign: 'center',
+        }}
+      >
+        <CustomerThemeSync isDark={customerIsDark} background={bgColor} />
+        <main style={{ width: '100%', maxWidth: 520 }}>
+          {cafe && (
+            <div style={{ marginBottom: 24 }}>
+              <CafeLogo
+                logoUrl={customerLogoUrl}
+                name={cafe.name}
+                brandColor={brandColor}
+                size={76}
+                radius={20}
+              />
+              <p style={{ margin: '12px 0 0', fontWeight: 700 }}>{cafe.name}</p>
+            </div>
+          )}
+          {sessionEnded ? (
+            <>
+              <h1 style={{ fontSize: 24, lineHeight: 1.4, margin: '0 0 12px' }}>
+                Thank you! Your order is paid. To order again, please scan the QR code on your table.
+              </h1>
+              <p lang="am" style={{ fontSize: 20, lineHeight: 1.6, margin: '0 0 28px' }}>
+                እናመሰግናለን! ትዕዛዝዎ ተከፍሏል። እንደገና ለማዘዝ፣ እባክዎ በጠረጴዛዎ ላይ ያለውን QR ኮድ ይቃኙ።
+              </p>
+            </>
+          ) : (
+            <>
+              <h1 style={{ fontSize: 24, lineHeight: 1.4, margin: '0 0 12px' }}>
+                Scan the QR code on your table to start ordering.
+              </h1>
+              <p lang="am" style={{ fontSize: 20, lineHeight: 1.6, margin: '0 0 28px' }}>
+                ማዘዝ ለመጀመር በጠረጴዛዎ ላይ ያለውን QR ኮድ ይቃኙ።
+              </p>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setScannerMessage('');
+              setScanModalOpen(true);
+            }}
+            style={{
+              minHeight: 58,
+              width: '100%',
+              maxWidth: 340,
+              border: 0,
+              borderRadius: 16,
+              background: buttonColor,
+              color: btnTextColor,
+              fontSize: 19,
+              fontWeight: 800,
+              cursor: 'pointer',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+            }}
+          >
+            <span style={{ display: 'block' }}>Scan QR Code</span>
+            <span lang="am" style={{ display: 'block', fontSize: 14, marginTop: 2 }}>QR ኮድ ይቃኙ</span>
+          </button>
+        </main>
+        {scanModalOpen && (
+          <div
+            role="presentation"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) setScanModalOpen(false);
+            }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 100000,
+              background: 'rgba(0,0,0,0.72)',
+              display: 'grid',
+              placeItems: 'center',
+              padding: 20,
+            }}
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="table-qr-scanner-title"
+              style={{
+                width: '100%',
+                maxWidth: 480,
+                background: surfaceColor,
+                color: messageColor,
+                border: `1px solid ${borderColor}`,
+                borderRadius: 20,
+                padding: 20,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                <h2 id="table-qr-scanner-title" style={{ margin: 0, fontSize: 20 }}>Scan QR Code</h2>
+                <button
+                  type="button"
+                  aria-label="Close scanner"
+                  onClick={() => setScanModalOpen(false)}
+                  style={{ border: 0, background: 'transparent', color: 'inherit', fontSize: 28, cursor: 'pointer' }}
+                >
+                  ×
+                </button>
+              </div>
+              <video
+                ref={scannerVideoRef}
+                autoPlay
+                playsInline
+                muted
+                aria-label="Camera QR preview"
+                style={{
+                  display: scannerMessage.startsWith('This browser does not support') ||
+                    scannerMessage.startsWith('Camera access is not supported') ? 'none' : 'block',
+                  width: '100%',
+                  aspectRatio: '4 / 3',
+                  objectFit: 'cover',
+                  marginTop: 16,
+                  borderRadius: 14,
+                  background: '#111',
+                }}
+              />
+              <p aria-live="polite" style={{ minHeight: 48, lineHeight: 1.5, margin: '16px 0 0', color: cardStyle.mutedText }}>
+                {scannerMessage || 'Point your camera at the QR code on your table.'}
+              </p>
+            </section>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -3421,21 +3717,6 @@ export default function CustomerMenuPage() {
           </div>
         </div>
       )}
-      <Modal
-        isOpen={sessionEnded && sessionEndNoticeOpen}
-        onClose={() => setSessionEndNoticeOpen(false)}
-        title={isAmharic ? 'የትዕዛዝ ክፍለ ጊዜዎ አብቅቷል' : 'Your session has ended'}
-        maxWidth={480}
-      >
-        <p style={{ color: 'var(--color-muted)', fontSize: 15, lineHeight: 1.6, margin: '0 0 20px' }}>
-          {isAmharic
-            ? 'ሌላ ነገር ለማዘዝ እባክዎ በጠረጴዛዎ ላይ ያለውን QR ኮድ እንደገና ይቃኙ።'
-            : 'Your session has ended. Please scan the QR code on your table again to order something else.'}
-        </p>
-        <Button fullWidth size="lg" variant="primary" onClick={() => setSessionEndNoticeOpen(false)}>
-          {isAmharic ? 'ሜኑውን ይመልከቱ' : 'Continue viewing menu'}
-        </Button>
-      </Modal>
     </div>
   );
 }
